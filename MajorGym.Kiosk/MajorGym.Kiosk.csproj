@@ -1,0 +1,38 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <Platforms>x64;x86</Platforms>
+    <UseWPF>true</UseWPF> <!-- for System.Windows.Media/MediaPlayer audio playback, see KioskSound.cs -->
+    <RootNamespace>MajorGym.Kiosk</RootNamespace>
+    <AssemblyName>MajorGym.Kiosk</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\MajorGym.Data\MajorGym.Data.csproj" />
+    <ProjectReference Include="..\MajorGym.Fingerprint\MajorGym.Fingerprint.csproj" />
+  </ItemGroup>
+
+  <!--
+    Stage 5 fix: FingerprintKioskLoop.cs uses "SecuGen.FDxSDKPro.Windows.SGFingerPrintManager"
+    directly (IsScannerConnected()'s cheap probe check), but a ProjectReference to
+    MajorGym.Fingerprint does not transitively expose Fingerprint's own private
+    <Reference> to this assembly at compile time. Without this block, any code file in
+    this project that uses a SecuGen type directly fails to compile with "the type or
+    namespace name could not be found". Mirrors the same conditional HintPath used in
+    MajorGym.Fingerprint.csproj. No native-DLL CopyToOutputDirectory items are needed
+    here: this project is a library, not the final executable, and the native SecuGen
+    DLLs already reach MajorGym.App's output directory via MajorGym.Fingerprint's own
+    CopyToOutputDirectory items propagating through the ProjectReference graph.
+  -->
+  <ItemGroup>
+    <Reference Include="SecuGen.FDxSDKPro.DotNet.Windows">
+      <HintPath Condition="'$(Platform)' == 'x86'">..\vendor\SecuGen\x86\SecuGen.FDxSDKPro.DotNet.Windows.dll</HintPath>
+      <HintPath Condition="'$(Platform)' != 'x86'">..\vendor\SecuGen\x64\SecuGen.FDxSDKPro.DotNet.Windows.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,53 @@
+<UserControl x:Class="MajorGym.App.Views.ArchivedMemberDetailView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <ScrollViewer Background="{StaticResource GymBg}">
+        <StackPanel Margin="20">
+            <Button Content="&#8592; Back" Command="{Binding BackCommand}" HorizontalAlignment="Left"
+                    Background="Transparent" BorderThickness="0" Foreground="{StaticResource GymTextMuted}" Margin="0,0,0,12"/>
+            <TextBlock Text="{Binding Archived.Name}" Style="{StaticResource GymHeading}" Margin="0,0,0,4"/>
+            <TextBlock Text="{Binding Archived.Phone}" Style="{StaticResource GymBody}" Margin="0,0,0,16"/>
+
+            <Border Style="{StaticResource GymCard}" Margin="0,0,0,16">
+                <StackPanel>
+                    <Grid Margin="0,0,0,8"><TextBlock Text="Joined" Style="{StaticResource GymBody}"/><TextBlock Text="{Binding JoinedOn}" Foreground="{StaticResource GymText}" HorizontalAlignment="Right"/></Grid>
+                    <Grid Margin="0,0,0,8"><TextBlock Text="Last Plan" Style="{StaticResource GymBody}"/><TextBlock Text="{Binding Archived.LastPlan}" Foreground="{StaticResource GymText}" HorizontalAlignment="Right"/></Grid>
+                    <Grid Margin="0,0,0,8"><TextBlock Text="Last Fee" Style="{StaticResource GymBody}"/><TextBlock Text="{Binding LastFeeText}" Foreground="{StaticResource GymText}" HorizontalAlignment="Right"/></Grid>
+                    <Grid Margin="0,0,0,8"><TextBlock Text="Last Membership Start" Style="{StaticResource GymBody}"/><TextBlock Text="{Binding LastMembershipStart}" Foreground="{StaticResource GymText}" HorizontalAlignment="Right"/></Grid>
+                    <Grid Margin="0,0,0,8"><TextBlock Text="Last Expiry" Style="{StaticResource GymBody}"/><TextBlock Text="{Binding LastExpiry}" Foreground="{StaticResource GymText}" HorizontalAlignment="Right"/></Grid>
+                    <Grid Margin="0,0,0,8"><TextBlock Text="ID Proof" Style="{StaticResource GymBody}"/><TextBlock Text="{Binding IdProofText}" Foreground="{StaticResource GymText}" HorizontalAlignment="Right"/></Grid>
+                    <Grid><TextBlock Text="Archived On" Style="{StaticResource GymBody}"/><TextBlock Text="{Binding ArchivedOn}" Foreground="{StaticResource GymText}" HorizontalAlignment="Right"/></Grid>
+                </StackPanel>
+            </Border>
+
+            <Button Content="Restore Member" Command="{Binding RequestRestoreCommand}" Style="{StaticResource GymPrimaryButton}" Margin="0,0,0,8"/>
+            <Button Content="Delete Permanently" Command="{Binding RequestDeleteCommand}" Background="Transparent" BorderThickness="1"
+                    BorderBrush="{StaticResource GymDanger}" Foreground="{StaticResource GymDanger}" Padding="16,10"/>
+
+            <Border Background="{StaticResource GymSurface2}" CornerRadius="12" Padding="16" Margin="0,16,0,0"
+                    Visibility="{Binding IsConfirmingRestore, Converter={StaticResource BoolToVis}}">
+                <StackPanel>
+                    <TextBlock Text="Restore this member?" Foreground="{StaticResource GymText}" FontWeight="SemiBold"/>
+                    <TextBlock Text="A new passkey and QR code will be issued — the old fingerprint and photos cannot be recovered and will need to be re-added."
+                               Style="{StaticResource GymBody}" TextWrapping="Wrap" Margin="0,8,0,12"/>
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                        <Button Content="Cancel" Command="{Binding CancelRestoreCommand}" Background="Transparent" BorderThickness="0" Foreground="{StaticResource GymTextMuted}" Margin="0,0,16,0"/>
+                        <Button Content="Restore" Command="{Binding ConfirmRestoreCommand}" Style="{StaticResource GymPrimaryButton}" Padding="16,8"/>
+                    </StackPanel>
+                </StackPanel>
+            </Border>
+
+            <Border Background="{StaticResource GymSurface2}" CornerRadius="12" Padding="16" Margin="0,16,0,0"
+                    Visibility="{Binding IsConfirmingDelete, Converter={StaticResource BoolToVis}}">
+                <StackPanel>
+                    <TextBlock Text="Delete this archived record?" Foreground="{StaticResource GymText}" FontWeight="SemiBold"/>
+                    <TextBlock Text="This cannot be undone. This person will no longer appear in the Expired Archive." Style="{StaticResource GymBody}" TextWrapping="Wrap" Margin="0,8,0,12"/>
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                        <Button Content="Cancel" Command="{Binding CancelDeleteCommand}" Background="Transparent" BorderThickness="0" Foreground="{StaticResource GymTextMuted}" Margin="0,0,16,0"/>
+                        <Button Content="Delete" Command="{Binding ConfirmDeleteCommand}" Background="{StaticResource GymDanger}" Foreground="White" BorderThickness="0" Padding="16,8"/>
+                    </StackPanel>
+                </StackPanel>
+            </Border>
+        </StackPanel>
+    </ScrollViewer>
+</UserControl>

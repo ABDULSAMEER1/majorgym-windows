@@ -1,0 +1,85 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                    xmlns:app="clr-namespace:MajorGym.App">
+    <BooleanToVisibilityConverter x:Key="BoolToVis"/>
+    <!-- Added in Stage 4 for the new screens' conditional-content bindings — see
+         Converters.cs. Kept in this shared dictionary rather than duplicated per-view. -->
+    <app:NullToVisibilityConverter x:Key="NullToVis"/>
+    <app:InverseBoolToVisibilityConverter x:Key="InverseBoolToVis"/>
+    <!--
+        Exact port of Android's GymColors object (ui/Theme.kt) — every hex value below is
+        copied verbatim from the golden reference, not approximated. (The Stage 2 draft's
+        MainWindow used an approximate #0B0F19 background; this resource dictionary is the
+        real, corrected palette and should be used by every screen from here on.)
+    -->
+    <SolidColorBrush x:Key="GymBg" Color="#FF080B12"/>
+    <SolidColorBrush x:Key="GymSurface" Color="#FF0D111A"/>
+    <SolidColorBrush x:Key="GymSurfaceCard" Color="#FF10141F"/>
+    <SolidColorBrush x:Key="GymSurface2" Color="#FF161B26"/>
+    <SolidColorBrush x:Key="GymSurface3" Color="#FF1F2A3D"/>
+
+    <SolidColorBrush x:Key="GymBorder" Color="#1FFFFFFF"/>
+    <SolidColorBrush x:Key="GymBorderSubtle" Color="#0FFFFFFF"/>
+    <SolidColorBrush x:Key="GymBorderGlowCyan" Color="#4D00F0FF"/>
+    <SolidColorBrush x:Key="GymBorderGlowViolet" Color="#408B5CF6"/>
+
+    <SolidColorBrush x:Key="GymAccent" Color="#FF00E0FF"/>
+    <SolidColorBrush x:Key="GymAccentBright" Color="#FF00F0FF"/>
+    <SolidColorBrush x:Key="GymAccentShift" Color="#FF0099FF"/>
+    <SolidColorBrush x:Key="GymGold" Color="#FFD1BCFF"/>
+    <SolidColorBrush x:Key="GymViolet" Color="#FF8B5CF6"/>
+    <SolidColorBrush x:Key="GymVioletDeep" Color="#FF7928CA"/>
+
+    <SolidColorBrush x:Key="GymSuccess" Color="#FF10B981"/>
+    <SolidColorBrush x:Key="GymWarning" Color="#FFF59E0B"/>
+    <SolidColorBrush x:Key="GymDanger" Color="#FFEF4444"/>
+
+    <SolidColorBrush x:Key="GymText" Color="#FFF5F7FA"/>
+    <SolidColorBrush x:Key="GymTextMuted" Color="#FF94A3B8"/>
+    <SolidColorBrush x:Key="GymTextFaint" Color="#FF64748B"/>
+
+    <LinearGradientBrush x:Key="GymAccentGradient" StartPoint="0,0" EndPoint="1,1">
+        <GradientStop Color="#FF00F0FF" Offset="0"/>
+        <GradientStop Color="#FF0099FF" Offset="1"/>
+    </LinearGradientBrush>
+
+    <!-- Shared "glass card" style used across Dashboard/Members/Profile/etc. — rounded,
+         faint border, elevated surface — matching Android's FuturisticCard/GlassHeroCard
+         component look (Stage 1 report §1.1). -->
+    <Style x:Key="GymCard" TargetType="Border">
+        <Setter Property="Background" Value="{StaticResource GymSurfaceCard}"/>
+        <Setter Property="BorderBrush" Value="{StaticResource GymBorder}"/>
+        <Setter Property="BorderThickness" Value="1"/>
+        <Setter Property="CornerRadius" Value="16"/>
+        <Setter Property="Padding" Value="16"/>
+    </Style>
+
+    <Style x:Key="GymHeading" TargetType="TextBlock">
+        <Setter Property="Foreground" Value="{StaticResource GymText}"/>
+        <Setter Property="FontSize" Value="22"/>
+        <Setter Property="FontWeight" Value="Bold"/>
+    </Style>
+
+    <Style x:Key="GymBody" TargetType="TextBlock">
+        <Setter Property="Foreground" Value="{StaticResource GymTextMuted}"/>
+        <Setter Property="FontSize" Value="13"/>
+    </Style>
+
+    <Style x:Key="GymPrimaryButton" TargetType="Button">
+        <Setter Property="Background" Value="{StaticResource GymAccentGradient}"/>
+        <Setter Property="Foreground" Value="#FF06121A"/>
+        <Setter Property="FontWeight" Value="SemiBold"/>
+        <Setter Property="Padding" Value="16,10"/>
+        <Setter Property="BorderThickness" Value="0"/>
+        <Setter Property="Cursor" Value="Hand"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Button">
+                    <Border Background="{TemplateBinding Background}" CornerRadius="12" Padding="{TemplateBinding Padding}">
+                        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                    </Border>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+</ResourceDictionary>

@@ -1,0 +1,39 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Windows conversion note: targets net8.0-windows, the current .NET LTS release that
+    satisfies the SecuGen FDx SDK Pro .NET Programming Manual's stated requirement of
+    ".NET 6 or higher" (see Documents/FDx SDK Pro .NET Programming Manual, Chapter 1.1).
+    This project has no direct SecuGen dependency, but is built against the same TFM as
+    the rest of the solution for consistency; it does not require the "-windows" suffix
+    functionally (no WPF/WinForms types are used here) but keeps it for solution uniformity.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <Platforms>x64;x86</Platforms>
+    <RootNamespace>MajorGym.Data</RootNamespace>
+    <AssemblyName>MajorGym.Data</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Direct SQLite access (no ORM) — see AppDatabase.cs header comment for why
+         Microsoft.Data.Sqlite (not EF Core) was chosen for Stage 2. -->
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="8.0.8" />
+    <!-- Windows replacement for Android's com.google.zxing (QR generation) — same
+         underlying ZXing algorithm family, .NET port. See QrUtils.cs. -->
+    <PackageReference Include="ZXing.Net" Version="0.16.9" />
+    <!-- ZXing.Net's own README recommends this companion package for producing a
+         System.Drawing.Bitmap renderer (used by QrUtils.cs); System.Drawing.Common is
+         Windows-only starting with .NET 6+, which matches this being a Windows-only app. -->
+    <PackageReference Include="System.Drawing.Common" Version="8.0.8" />
+    <!-- Required for CryptoUtils.cs's DPAPI-based at-rest key protection
+         (System.Security.Cryptography.ProtectedData) — this type is NOT part of the
+         base class library even on net8.0-windows; it has always shipped as a separate
+         opt-in package. MISSING IN THE STAGE 2 DRAFT — found and fixed in Stage 3 via
+         real compilation against a verification harness (see Stage 3 report). -->
+    <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="8.0.0" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <Platforms>x64;x86</Platforms>
+    <RootNamespace>MajorGym.App</RootNamespace>
+    <AssemblyName>MajorGym</AssemblyName>
+    <ApplicationIcon></ApplicationIcon>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\MajorGym.Data\MajorGym.Data.csproj" />
+    <ProjectReference Include="..\MajorGym.Fingerprint\MajorGym.Fingerprint.csproj" />
+    <ProjectReference Include="..\MajorGym.Kiosk\MajorGym.Kiosk.csproj" />
+  </ItemGroup>
+
+</Project>

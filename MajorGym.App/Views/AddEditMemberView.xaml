@@ -1,0 +1,42 @@
+<UserControl x:Class="MajorGym.App.Views.AddEditMemberView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <ScrollViewer Padding="16,20,16,140">
+        <StackPanel MaxWidth="480" HorizontalAlignment="Left">
+            <TextBlock Text="{Binding HeaderText}" Style="{StaticResource GymHeading}" Margin="0,0,0,16"/>
+
+            <TextBlock Text="Full Name" Style="{StaticResource GymBody}"/>
+            <TextBox Text="{Binding Name, UpdateSourceTrigger=PropertyChanged}" Margin="0,4,0,12" Padding="8"
+                     Background="{StaticResource GymSurface2}" Foreground="{StaticResource GymText}" BorderBrush="{StaticResource GymBorder}"/>
+
+            <TextBlock Text="Phone" Style="{StaticResource GymBody}"/>
+            <TextBox Text="{Binding Phone, UpdateSourceTrigger=PropertyChanged}" Margin="0,4,0,4" Padding="8"
+                     Background="{StaticResource GymSurface2}" Foreground="{StaticResource GymText}" BorderBrush="{StaticResource GymBorder}"/>
+            <TextBlock Text="This phone number is already registered to another member." Foreground="{StaticResource GymDanger}" FontSize="12"
+                       Visibility="{Binding PhoneTaken, Converter={StaticResource BoolToVis}}" Margin="0,0,0,8"/>
+
+            <TextBlock Text="Plan" Style="{StaticResource GymBody}"/>
+            <ComboBox ItemsSource="{Binding PlanOptions}" SelectedItem="{Binding Plan}" Margin="0,4,0,12" Padding="8"/>
+
+            <TextBlock Text="Due Amount (₹) (Optional)" Style="{StaticResource GymBody}"/>
+            <TextBox Text="{Binding FeeText, UpdateSourceTrigger=PropertyChanged}" Margin="0,4,0,12" Padding="8"
+                     Background="{StaticResource GymSurface2}" Foreground="{StaticResource GymText}" BorderBrush="{StaticResource GymBorder}"/>
+
+            <TextBlock Text="{Binding ExpiryPreview, StringFormat='Expires: {0}'}" Style="{StaticResource GymBody}" Margin="0,0,0,16"/>
+
+            <TextBlock Text="ID Proof (Optional)" Style="{StaticResource GymBody}"/>
+            <TextBox Text="{Binding IdProof, UpdateSourceTrigger=PropertyChanged}" Margin="0,4,0,12" Padding="8"
+                     Background="{StaticResource GymSurface2}" Foreground="{StaticResource GymText}" BorderBrush="{StaticResource GymBorder}"/>
+
+            <StackPanel Orientation="Horizontal" Margin="0,0,0,12">
+                <Button Content="Choose Photo" Command="{Binding ChoosePhotoCommand}" Margin="0,0,10,0" Padding="10,6"/>
+                <Button Content="Choose ID Photo" Command="{Binding ChooseIdPhotoCommand}" Padding="10,6"/>
+            </StackPanel>
+
+            <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                <Button Content="Cancel" Command="{Binding CancelCommand}" Margin="0,0,10,0" Padding="16,10"/>
+                <Button Content="{Binding HeaderText}" Style="{StaticResource GymPrimaryButton}" Command="{Binding SaveCommand}"/>
+            </StackPanel>
+        </StackPanel>
+    </ScrollViewer>
+</UserControl>

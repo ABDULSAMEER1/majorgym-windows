@@ -1,0 +1,43 @@
+<UserControl x:Class="MajorGym.App.Views.EnrollFingerprintView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <Grid Background="{StaticResource GymBg}">
+        <StackPanel Margin="20" VerticalAlignment="Center">
+            <TextBlock Text="Enroll Fingerprint" Style="{StaticResource GymHeading}" HorizontalAlignment="Center" Margin="0,0,0,4"/>
+            <TextBlock Text="{Binding Member.Name}" Style="{StaticResource GymBody}" HorizontalAlignment="Center" Margin="0,0,0,20"/>
+
+            <TextBlock Text="A fingerprint is already enrolled for this member. Starting again will replace it."
+                       Style="{StaticResource GymBody}" TextWrapping="Wrap" HorizontalAlignment="Center" TextAlignment="Center" Margin="0,0,0,16"
+                       Visibility="{Binding AlreadyEnrolled, Converter={StaticResource BoolToVis}}"/>
+
+            <Border Style="{StaticResource GymCard}">
+                <StackPanel HorizontalAlignment="Center">
+                    <Ellipse Width="96" Height="96" StrokeThickness="3" Margin="0,0,0,16" Stroke="{StaticResource GymAccent}"/>
+                    <TextBlock Text="{Binding StatusText}" TextWrapping="Wrap" TextAlignment="Center" HorizontalAlignment="Center" MaxWidth="280">
+                        <TextBlock.Style>
+                            <Style TargetType="TextBlock">
+                                <Setter Property="Foreground" Value="{StaticResource GymText}"/>
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding IsError}" Value="True">
+                                        <Setter Property="Foreground" Value="{StaticResource GymDanger}"/>
+                                    </DataTrigger>
+                                    <DataTrigger Binding="{Binding IsSuccess}" Value="True">
+                                        <Setter Property="Foreground" Value="{StaticResource GymSuccess}"/>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </TextBlock.Style>
+                    </TextBlock>
+                </StackPanel>
+            </Border>
+
+            <Button Content="Start Enrollment" Command="{Binding StartCommand}" Style="{StaticResource GymPrimaryButton}"
+                    Margin="0,20,0,0" Visibility="{Binding IsBusy, Converter={StaticResource InverseBoolToVis}}"/>
+            <Button Content="Cancel" Command="{Binding CancelCommand}" Background="Transparent" BorderThickness="1"
+                    BorderBrush="{StaticResource GymBorder}" Foreground="{StaticResource GymTextMuted}" Padding="16,10" Margin="0,12,0,0"
+                    Visibility="{Binding IsBusy, Converter={StaticResource BoolToVis}}"/>
+            <Button Content="Done" Command="{Binding DoneCommand}" Style="{StaticResource GymPrimaryButton}" Margin="0,20,0,0"
+                    Visibility="{Binding IsSuccess, Converter={StaticResource BoolToVis}}"/>
+        </StackPanel>
+    </Grid>
+</UserControl>

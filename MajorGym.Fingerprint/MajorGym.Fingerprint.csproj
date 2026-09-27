@@ -1,0 +1,60 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <!-- Matches the SecuGen sample's own supported platform set (DotNET/Samples/C#/Matching/matching_cs2022.csproj) -->
+    <Platforms>x64;x86</Platforms>
+    <RootNamespace>MajorGym.Fingerprint</RootNamespace>
+    <AssemblyName>MajorGym.Fingerprint</AssemblyName>
+  </PropertyGroup>
+
+  <!--
+    SecuGen.FDxSDKPro.DotNet.Windows.dll — the modern .NET assembly (net6.0-windows or higher,
+    per FDx SDK Pro .NET Programming Manual Chapter 1.2), NOT the legacy
+    SecuGen.FDxSDKPro.Windows.dll (.NET Framework) assembly. Per architecture, matching the
+    platform this project is built for (x64 primary, x86 optional — see solution's vendor\SecuGen).
+    The C# namespace exposed by this assembly is "SecuGen.FDxSDKPro.Windows" regardless of
+    which of the two DLLs is referenced (manual Chapter 1.3) — this is intentional on
+    SecuGen's part, not a mistake in this project's `using` directives.
+  -->
+  <ItemGroup>
+    <Reference Include="SecuGen.FDxSDKPro.DotNet.Windows">
+      <HintPath Condition="'$(Platform)' == 'x86'">..\vendor\SecuGen\x86\SecuGen.FDxSDKPro.DotNet.Windows.dll</HintPath>
+      <HintPath Condition="'$(Platform)' != 'x86'">..\vendor\SecuGen\x64\SecuGen.FDxSDKPro.DotNet.Windows.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+  </ItemGroup>
+
+  <!--
+    Native runtime DLLs required alongside the managed assembly (manual Chapter 1.4):
+    sgfplib.dll (main module), sgfpamx.dll (MINEX-certified extraction/matching),
+    sgwsqlib.dll (WSQ module). sgfdusda.dll / sgbledev.dll are Bluetooth-only (U20-ASF-BT)
+    and are NOT copied: Major Gym's device_filter.xml (Android) lists only USB VID/PID
+    pairs — no Bluetooth SecuGen device is in scope for this conversion (see Stage 1 report,
+    §4.2). If Bluetooth support is ever required, these two native DLLs would need adding
+    here — do not add them speculatively now.
+  -->
+  <ItemGroup>
+    <None Include="..\vendor\SecuGen\x64\sgfplib.dll" Condition="'$(Platform)' != 'x86'">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Include="..\vendor\SecuGen\x64\sgfpamx.dll" Condition="'$(Platform)' != 'x86'">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Include="..\vendor\SecuGen\x64\sgwsqlib.dll" Condition="'$(Platform)' != 'x86'">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Include="..\vendor\SecuGen\x86\sgfplib.dll" Condition="'$(Platform)' == 'x86'">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Include="..\vendor\SecuGen\x86\sgfpamx.dll" Condition="'$(Platform)' == 'x86'">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Include="..\vendor\SecuGen\x86\sgwsqlib.dll" Condition="'$(Platform)' == 'x86'">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
+</Project>

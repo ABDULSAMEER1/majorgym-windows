@@ -1,0 +1,115 @@
+name: Windows Build (MajorGym.exe)
+
+# Stage 7 objective: produce a genuine Windows-built MajorGym.exe (Release, x64) via a
+# real GitHub-hosted Windows runner, and upload the complete runnable output as a
+# downloadable GitHub Actions artifact. This workflow does NOT touch application
+# functionality — it only builds and packages the existing Stage 6/7 source.
+#
+# This workflow deliberately does not exercise SecuGen hardware — a Windows CI runner has
+# no USB fingerprint reader attached. It only proves the WPF application compiles and
+# packages cleanly on real Windows/MSBuild. Real Hamster 20 testing happens on a physical
+# Windows laptop, manually, after downloading the artifact this workflow produces.
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+  workflow_dispatch: {}
+
+env:
+  SOLUTION_FILE: MajorGym.Windows.sln
+  BUILD_CONFIGURATION: Release
+  BUILD_PLATFORM: x64
+  # AssemblyName of MajorGym.App/MajorGym.App.csproj — the expected final executable name.
+  EXPECTED_EXE: MajorGym.exe
+
+jobs:
+  build-windows-x64:
+    # Real Windows runner — required because this solution targets net8.0-windows /
+    # UseWPF=true and cannot compile on ubuntu-latest.
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 8 SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Show SDK / runner info
+        run: |
+          dotnet --info
+          echo "Runner OS: $env:RUNNER_OS"
+
+      - name: Restore solution
+        run: dotnet restore "${{ env.SOLUTION_FILE }}"
+
+      - name: Build MajorGym (Release | x64)
+        run: >
+          dotnet build "${{ env.SOLUTION_FILE }}"
+          -c ${{ env.BUILD_CONFIGURATION }}
+          -p:Platform=${{ env.BUILD_PLATFORM }}
+          --no-restore
+
+      - name: Locate build output directory
+        id: locate
+        shell: pwsh
+        run: |
+          # Search for the expected exe anywhere under MajorGym.App's bin folder rather
+          # than hard-coding a single path, so a future TFM/output-path change doesn't
+          # silently break packaging. Excludes the "obj" folder and any x86 output.
+          $matches = Get-ChildItem -Path "MajorGym.App/bin" -Filter $env:EXPECTED_EXE -Recurse -ErrorAction SilentlyContinue |
+            Where-Object { $_.FullName -match "\\$env:BUILD_PLATFORM\\" -and $_.FullName -match "\\$env:BUILD_CONFIGURATION\\" }
+
+          if (-not $matches -or $matches.Count -eq 0) {
+            Write-Error "Could not locate $env:EXPECTED_EXE under MajorGym.App/bin for $env:BUILD_PLATFORM/$env:BUILD_CONFIGURATION. Build output layout may have changed."
+            Get-ChildItem -Path "MajorGym.App/bin" -Recurse -ErrorAction SilentlyContinue | Select-Object FullName
+            exit 1
+          }
+
+          $exePath = $matches[0].FullName
+          $outDir = $matches[0].DirectoryName
+          Write-Host "Found $env:EXPECTED_EXE at: $exePath"
+          Write-Host "Output directory: $outDir"
+
+          "outdir=$outDir" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
+      - name: Verify expected executable exists
+        shell: pwsh
+        run: |
+          $exe = Join-Path "${{ steps.locate.outputs.outdir }}" $env:EXPECTED_EXE
+          if (-not (Test-Path $exe)) {
+            Write-Error "$env:EXPECTED_EXE was not found at expected path: $exe"
+            exit 1
+          }
+          Write-Host "Verified: $exe exists."
+          Get-Item $exe | Select-Object FullName, Length, LastWriteTime
+
+      - name: Stage complete runnable output
+        shell: pwsh
+        run: |
+          $staging = "artifact-staging/MajorGym-Windows-x64"
+          New-Item -ItemType Directory -Path $staging -Force | Out-Null
+          # Copy the ENTIRE build output directory (exe + all Major Gym DLLs + SecuGen
+          # managed/native DLLs + .NET dependency DLLs/.deps.json/.runtimeconfig.json) —
+          # not just the exe. This is a framework-dependent build: the target Windows
+          # machine needs the .NET 8 Desktop Runtime installed to launch it.
+          Copy-Item -Path "${{ steps.locate.outputs.outdir }}/*" -Destination $staging -Recurse -Force
+          Get-ChildItem $staging | Select-Object Name, Length
+
+      - name: Package output as zip
+        shell: pwsh
+        run: |
+          Compress-Archive -Path "artifact-staging/MajorGym-Windows-x64/*" -DestinationPath "MajorGym-Windows-x64.zip" -Force
+          Get-Item "MajorGym-Windows-x64.zip" | Select-Object FullName, Length
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: MajorGym-Windows-x64
+          path: MajorGym-Windows-x64.zip
+          if-no-files-found: error
+          retention-days: 14

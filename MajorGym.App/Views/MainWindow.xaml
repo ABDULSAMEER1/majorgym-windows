@@ -1,0 +1,73 @@
+<Window x:Class="MajorGym.App.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="clr-namespace:MajorGym.App.ViewModels"
+        xmlns:views="clr-namespace:MajorGym.App.Views"
+        Title="Major Gym" Height="800" Width="420"
+        Background="{StaticResource GymBg}">
+    <!--
+        Stage 3 navigation shell — replaces the Stage 2 foundation-status placeholder.
+        Hosts NavigationViewModel.CurrentViewModel in a ContentControl; which View renders
+        for which ViewModel is decided by the DataTemplates below (WPF's own idiom for
+        "swap the screen when the current route changes", the direct equivalent of
+        Android's `when(screen)` block in MainActivity.kt — see Navigation/Screen.cs and
+        Navigation/NavigationViewModel.cs for the full mapping and what's implemented so
+        far in this stage).
+    -->
+    <Window.Resources>
+        <DataTemplate DataType="{x:Type vm:DashboardViewModel}"><views:DashboardView/></DataTemplate>
+        <DataTemplate DataType="{x:Type vm:MembersViewModel}"><views:MembersView/></DataTemplate>
+        <DataTemplate DataType="{x:Type vm:AddEditMemberViewModel}"><views:AddEditMemberView/></DataTemplate>
+        <DataTemplate DataType="{x:Type vm:ProfileViewModel}"><views:ProfileView/></DataTemplate>
+        <!-- Added in Stage 4 (Member workflow) -->
+        <DataTemplate DataType="{x:Type vm:RegisteredViewModel}"><views:RegisteredView/></DataTemplate>
+        <DataTemplate DataType="{x:Type vm:RenewViewModel}"><views:RenewView/></DataTemplate>
+        <DataTemplate DataType="{x:Type vm:RenewedViewModel}"><views:RenewedView/></DataTemplate>
+        <DataTemplate DataType="{x:Type vm:FilteredMembersViewModel}"><views:FilteredMembersView/></DataTemplate>
+        <!-- Added in Stage 4b (Attendance / Backup / Fingerprint / Archive workflows) -->
+        <DataTemplate DataType="{x:Type vm:AttendanceViewModel}"><views:AttendanceView/></DataTemplate>
+        <DataTemplate DataType="{x:Type vm:AttendanceLogsViewModel}"><views:AttendanceLogsView/></DataTemplate>
+        <DataTemplate DataType="{x:Type vm:AttendanceHistoryViewModel}"><views:AttendanceHistoryView/></DataTemplate>
+        <DataTemplate DataType="{x:Type vm:BackupViewModel}"><views:BackupView/></DataTemplate>
+        <DataTemplate DataType="{x:Type vm:BackupHistoryViewModel}"><views:BackupHistoryView/></DataTemplate>
+        <DataTemplate DataType="{x:Type vm:EnrollFingerprintViewModel}"><views:EnrollFingerprintView/></DataTemplate>
+        <DataTemplate DataType="{x:Type vm:ExpiredArchiveViewModel}"><views:ExpiredArchiveView/></DataTemplate>
+        <DataTemplate DataType="{x:Type vm:ArchivedMemberDetailViewModel}"><views:ArchivedMemberDetailView/></DataTemplate>
+    </Window.Resources>
+
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <ContentControl Grid.Row="0" Content="{Binding CurrentViewModel}"/>
+
+        <!-- Bottom nav — 4 items, matching Android's BottomNav (Dashboard / Attendance
+             Logs / Backup / Sync — Stage 1 report §1.1). Attendance Logs and Backup are
+             implemented as of Stage 4b; Sync remains explicitly out of scope (brief §16 —
+             LAN transport stays a Stage 2/3 boundary/stub) so its button stays disabled. -->
+        <Border Grid.Row="1" Background="{StaticResource GymSurface}" BorderBrush="{StaticResource GymBorder}" BorderThickness="0,1,0,0">
+            <UniformGrid Columns="4" Height="64">
+                <Button Content="Dashboard" Click="NavDashboard_Click" Background="Transparent" BorderThickness="0" Foreground="{StaticResource GymText}"/>
+                <Button Content="Attendance Logs" Click="NavAttendanceLogs_Click" Background="Transparent" BorderThickness="0" Foreground="{StaticResource GymText}"/>
+                <Button Content="Backup" Click="NavBackup_Click" Background="Transparent" BorderThickness="0" Foreground="{StaticResource GymText}"/>
+                <Button Content="Sync" Background="Transparent" BorderThickness="0" Foreground="{StaticResource GymTextFaint}" IsEnabled="False"/>
+            </UniformGrid>
+        </Border>
+
+        <!--
+            Kiosk overlay — layered on top of BOTH rows above via Grid.RowSpan="2", so it can
+            never participate in either row's layout flow and can never push content around
+            or leave a screen scrolled to a different position (see
+            KioskOverlayViewModel's doc comment for the Android UI bug — brief §7 — this
+            specifically avoids reproducing). Deliberately renders ONLY the "Member Not
+            Found" no-match case (brief §6): a recognized scan is never shown here at all.
+        -->
+        <Border Grid.Row="0" Grid.RowSpan="2" VerticalAlignment="Bottom" HorizontalAlignment="Stretch"
+                Margin="16,0,16,80" Padding="16,12" CornerRadius="12" Background="{StaticResource GymDanger}"
+                Visibility="{Binding KioskOverlay.IsVisible, Converter={StaticResource BoolToVis}}" IsHitTestVisible="False">
+            <TextBlock Text="{Binding KioskOverlay.Message}" Foreground="White" FontWeight="SemiBold" HorizontalAlignment="Center"/>
+        </Border>
+    </Grid>
+</Window>
