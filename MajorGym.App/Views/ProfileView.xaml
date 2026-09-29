@@ -1,68 +1,160 @@
 <UserControl x:Class="MajorGym.App.Views.ProfileView"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
-    <ScrollViewer Padding="16,20,16,90">
-        <StackPanel MaxWidth="480" HorizontalAlignment="Left">
-            <TextBlock Text="MEMBER PROFILE" Style="{StaticResource GymHeading}" Margin="0,0,0,16"/>
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:ctl="clr-namespace:MajorGym.App.Controls">
+    <!-- Android ProfileScreen (Screens.kt ~1268-1512), same order: back arrow + header,
+         StatusRing/name/StatusBadge/days-remaining, info card (Phone/Joined/Renewed?/Expires/
+         Current Plan/Due Amount/ID Proof/Fingerprint), Due Payment card (only while Fee>0), ID
+         Proof Photo card, action button rows (Renew/Edit/Delete, View-or-Regenerate
+         QR/Enroll-or-Re-enroll Fingerprint, Remove Fingerprint-if-enrolled), HISTORY list. -->
+    <Grid>
+        <ScrollViewer VerticalScrollBarVisibility="Auto">
+            <StackPanel MaxWidth="560" HorizontalAlignment="Stretch" Margin="16,20,16,24">
 
-            <StackPanel HorizontalAlignment="Center" Margin="0,0,0,16">
-                <TextBlock Text="{Binding Member.Name}" Foreground="{StaticResource GymText}" FontSize="20" FontWeight="Bold" HorizontalAlignment="Center"/>
-                <TextBlock Text="{Binding StatusText}" Foreground="{StaticResource GymAccent}" FontSize="13" HorizontalAlignment="Center" Margin="0,4,0,0"/>
-                <TextBlock Text="{Binding DaysRemainingText}" Style="{StaticResource GymBody}" HorizontalAlignment="Center" Margin="0,4,0,0"/>
+                <DockPanel Margin="0,0,0,16">
+                    <Button DockPanel.Dock="Left" Command="{Binding BackCommand}" Background="Transparent" BorderThickness="0" Cursor="Hand"
+                            Foreground="{StaticResource GymText}" FontFamily="Segoe MDL2 Assets" FontSize="18" Content="&#xE72B;" Padding="0,0,10,0"/>
+                    <TextBlock Text="MEMBER PROFILE" Style="{StaticResource GymHeaderText}"/>
+                </DockPanel>
+
+                <StackPanel HorizontalAlignment="Center" Margin="0,0,0,16">
+                    <ctl:StatusRing PhotoPath="{Binding Member.PhotoPath}" MemberName="{Binding Member.Name}" Status="{Binding Status}"
+                                    RingSize="96" Cursor="Hand">
+                        <ctl:StatusRing.InputBindings>
+                            <MouseBinding MouseAction="LeftClick" Command="{Binding ViewPhotoCommand}"/>
+                        </ctl:StatusRing.InputBindings>
+                    </ctl:StatusRing>
+                    <TextBlock Text="{Binding Member.Name}" Foreground="{StaticResource GymText}" FontSize="20" FontWeight="Bold"
+                               HorizontalAlignment="Center" Margin="0,12,0,6"/>
+                    <ctl:StatusBadge Status="{Binding Status}" Margin="0,0,0,6"/>
+                    <TextBlock Text="{Binding DaysRemainingText}" Foreground="{StaticResource GymTextFaint}" FontSize="12" HorizontalAlignment="Center"/>
+                </StackPanel>
+
+                <Border Background="{StaticResource GymSurfaceCard}" BorderBrush="{StaticResource GymBorder}" BorderThickness="1" CornerRadius="16" Padding="16" Margin="0,0,0,14">
+                    <StackPanel>
+                        <ctl:ProfileRow Label="Phone" Value="{Binding Member.Phone}"/>
+                        <ctl:ProfileRow Label="Joined" Value="{Binding JoinedText}"/>
+                        <ctl:ProfileRow Label="Renewed" Value="{Binding LastRenewedText}"
+                                        Visibility="{Binding LastRenewedText, Converter={StaticResource NullToVis}}"/>
+                        <ctl:ProfileRow Label="Expires" Value="{Binding ExpiresText}"/>
+                        <ctl:ProfileRow Label="Current Plan" Value="{Binding Member.Plan}"/>
+                        <ctl:ProfileRow Label="Due Amount" Value="{Binding DueAmountText}">
+                            <ctl:ProfileRow.Style>
+                                <Style TargetType="ctl:ProfileRow">
+                                    <Setter Property="ValueBrush" Value="{StaticResource GymSuccess}"/>
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding HasDue}" Value="True">
+                                            <Setter Property="ValueBrush" Value="{StaticResource GymDanger}"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </ctl:ProfileRow.Style>
+                        </ctl:ProfileRow>
+                        <ctl:ProfileRow Label="ID Proof" Value="{Binding IdProofText}"/>
+                        <ctl:ProfileRow Label="Fingerprint" Value="{Binding FingerprintStatusText}" IsLast="True"/>
+                    </StackPanel>
+                </Border>
+
+                <!-- Due Payment — only while there's something due. -->
+                <Border Background="{StaticResource GymSurfaceCard}" BorderBrush="{StaticResource GymBorder}" BorderThickness="1" CornerRadius="16" Padding="16" Margin="0,0,0,14"
+                        Visibility="{Binding HasDue, Converter={StaticResource BoolToVis}}">
+                    <StackPanel>
+                        <TextBlock Text="DUE PAYMENT" Style="{StaticResource GymSectionLabel}" Margin="0,0,0,10"/>
+                        <DockPanel Margin="0,0,0,12">
+                            <TextBlock DockPanel.Dock="Left" Text="Due Amount" Foreground="{StaticResource GymTextMuted}" FontSize="13"/>
+                            <TextBlock DockPanel.Dock="Right" Text="{Binding DueAmountText}" Foreground="{StaticResource GymDanger}" FontSize="15" FontWeight="Bold" HorizontalAlignment="Right"/>
+                        </DockPanel>
+                        <TextBlock Text="AMOUNT PAID (₹)" Style="{StaticResource GymFieldLabel}"/>
+                        <TextBox Text="{Binding AmountPaidText, UpdateSourceTrigger=PropertyChanged}" Tag="Enter amount being paid now"
+                                 Style="{StaticResource GymTextBox}" ctl:InputGuard.Mode="Digits" Margin="0,0,0,4"/>
+                        <TextBlock Text="{Binding PaymentError}" Style="{StaticResource GymFieldError}" TextWrapping="Wrap"
+                                   Visibility="{Binding PaymentError, Converter={StaticResource NullToVis}}"/>
+                        <Button Content="Save Payment" Command="{Binding RecordPaymentCommand}" Style="{StaticResource GymPrimaryButtonLarge}" Margin="0,12,0,0"/>
+                    </StackPanel>
+                </Border>
+
+                <!-- ID Proof Photo -->
+                <Border Background="{StaticResource GymSurfaceCard}" BorderBrush="{StaticResource GymBorder}" BorderThickness="1" CornerRadius="16" Padding="16" Margin="0,0,0,16">
+                    <StackPanel>
+                        <TextBlock Text="ID PROOF PHOTO" Style="{StaticResource GymSectionLabel}" Margin="0,0,0,10"/>
+                        <Border CornerRadius="12" Height="140" ClipToBounds="True" Cursor="Hand"
+                                Visibility="{Binding HasIdProofPhoto, Converter={StaticResource BoolToVis}}">
+                            <Border.Background><ImageBrush ImageSource="{Binding Member.IdProofPhotoPath, Converter={StaticResource PathToImage}}" Stretch="UniformToFill"/></Border.Background>
+                            <Border.InputBindings><MouseBinding MouseAction="LeftClick" Command="{Binding ViewIdPhotoCommand}"/></Border.InputBindings>
+                        </Border>
+                        <TextBlock Text="No ID Proof Photo" Foreground="{StaticResource GymTextFaint}" FontSize="13"
+                                   Visibility="{Binding HasIdProofPhoto, Converter={StaticResource InverseBoolToVis}}"/>
+                    </StackPanel>
+                </Border>
+
+                <UniformGrid Columns="3" Margin="0,0,0,8">
+                    <Button Content="Renew" Command="{Binding RenewCommand}" Style="{StaticResource GymActionButton}" Margin="0,0,4,0"/>
+                    <Button Content="Edit" Command="{Binding EditCommand}" Style="{StaticResource GymActionButtonMuted}" Margin="4,0,4,0"/>
+                    <Button Content="Delete" Command="{Binding RequestDeleteCommand}" Style="{StaticResource GymActionButtonDanger}" Margin="4,0,0,0"/>
+                </UniformGrid>
+                <UniformGrid Columns="2" Margin="0,0,0,8">
+                    <Button Content="{Binding QrButtonText}" Command="{Binding ViewQrCommand}" Style="{StaticResource GymActionButton}" Margin="0,0,4,0"/>
+                    <Button Content="{Binding EnrollButtonText}" Command="{Binding EnrollFingerprintCommand}" Style="{StaticResource GymActionButton}" Margin="4,0,0,0"/>
+                </UniformGrid>
+                <!-- Android "Fix #11": only shown once a fingerprint exists. -->
+                <Button Content="Remove Fingerprint" Command="{Binding RequestRemoveFingerprintCommand}" Style="{StaticResource GymActionButtonDanger}" Margin="0,0,0,16"
+                        Visibility="{Binding HasFingerprint, Converter={StaticResource BoolToVis}}"/>
+
+                <TextBlock Text="HISTORY" Style="{StaticResource GymSectionLabel}" Margin="0,0,0,8"/>
+                <ItemsControl ItemsSource="{Binding HistoryEntries}">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <Border Background="{StaticResource GymSurfaceCard}" BorderBrush="{StaticResource GymBorder}" BorderThickness="1" CornerRadius="12" Padding="12" Margin="0,0,0,8">
+                                <DockPanel>
+                                    <TextBlock DockPanel.Dock="Right" Text="{Binding Fee, Converter={StaticResource MoneyFormat}}" Foreground="{StaticResource GymGold}"
+                                               FontSize="13" FontWeight="Bold" VerticalAlignment="Center"/>
+                                    <StackPanel>
+                                        <TextBlock Foreground="{StaticResource GymText}" FontSize="13" FontWeight="Medium">
+                                            <Run Text="{Binding Type, Mode=OneWay}"/><Run Text=" · "/><Run Text="{Binding Plan, Mode=OneWay}"/>
+                                        </TextBlock>
+                                        <TextBlock Foreground="{StaticResource GymTextMuted}" FontSize="11">
+                                            <Run Text="{Binding DateMillis, Converter={StaticResource DateFormat}, Mode=OneWay}"/><Run Text=" → "/>
+                                            <Run Text="{Binding ExpiryMillis, Converter={StaticResource DateFormat}, Mode=OneWay}"/>
+                                        </TextBlock>
+                                    </StackPanel>
+                                </DockPanel>
+                            </Border>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
             </StackPanel>
+        </ScrollViewer>
 
-            <Border Style="{StaticResource GymCard}" Margin="0,0,0,14">
+        <!-- "Delete member" AlertDialog -->
+        <Grid Background="{StaticResource GymScrim}" Visibility="{Binding IsConfirmingDelete, Converter={StaticResource BoolToVis}}">
+            <Border Background="{StaticResource GymSurfaceCard}" CornerRadius="24" Padding="24" MaxWidth="340" HorizontalAlignment="Center" VerticalAlignment="Center" Margin="24">
                 <StackPanel>
-                    <Grid Margin="0,0,0,10"><TextBlock Text="Phone" Style="{StaticResource GymBody}"/><TextBlock Text="{Binding Member.Phone}" Foreground="{StaticResource GymText}" HorizontalAlignment="Right"/></Grid>
-                    <Grid Margin="0,0,0,10"><TextBlock Text="Joined" Style="{StaticResource GymBody}"/><TextBlock Text="{Binding JoinedText}" Foreground="{StaticResource GymText}" HorizontalAlignment="Right"/></Grid>
-                    <Grid Margin="0,0,0,10">
-                        <TextBlock Text="Renewed" Style="{StaticResource GymBody}"/><TextBlock Text="{Binding LastRenewedText}" Foreground="{StaticResource GymText}" HorizontalAlignment="Right"/>
-                    </Grid>
-                    <Grid Margin="0,0,0,10"><TextBlock Text="Current Plan" Style="{StaticResource GymBody}"/><TextBlock Text="{Binding Member.Plan}" Foreground="{StaticResource GymText}" HorizontalAlignment="Right"/></Grid>
-                    <Grid Margin="0,0,0,10"><TextBlock Text="Due Amount" Style="{StaticResource GymBody}"/><TextBlock Text="{Binding DueAmountText}" Foreground="{StaticResource GymDanger}" HorizontalAlignment="Right"/></Grid>
-                    <Grid Margin="0,0,0,10"><TextBlock Text="ID Proof" Style="{StaticResource GymBody}"/><TextBlock Text="{Binding IdProofText}" Foreground="{StaticResource GymText}" HorizontalAlignment="Right"/></Grid>
-                    <Grid><TextBlock Text="Fingerprint" Style="{StaticResource GymBody}"/><TextBlock Text="{Binding FingerprintStatusText}" Foreground="{StaticResource GymText}" HorizontalAlignment="Right"/></Grid>
-                </StackPanel>
-            </Border>
-
-            <Border Style="{StaticResource GymCard}" Margin="0,0,0,14" Visibility="{Binding HasDue, Converter={StaticResource BoolToVis}}">
-                <StackPanel>
-                    <TextBlock Text="Due Payment" Foreground="{StaticResource GymText}" FontWeight="SemiBold" Margin="0,0,0,8"/>
-                    <TextBox Text="{Binding AmountPaidText, UpdateSourceTrigger=PropertyChanged}" Padding="8" Margin="0,0,0,8"
-                             Background="{StaticResource GymSurface2}" Foreground="{StaticResource GymText}" BorderBrush="{StaticResource GymBorder}"/>
-                    <TextBlock Text="{Binding PaymentError}" Foreground="{StaticResource GymDanger}" FontSize="12" Margin="0,0,0,8"/>
-                    <Button Content="Record Payment" Command="{Binding RecordPaymentCommand}" HorizontalAlignment="Left" Padding="10,6"/>
-                </StackPanel>
-            </Border>
-
-            <!-- Delete confirmation panel — see ProfileViewModel's IsConfirmingDelete doc
-                 comment for why this is inline rather than a separate popup Window. -->
-            <Border Style="{StaticResource GymCard}" Margin="0,0,0,14" BorderBrush="{StaticResource GymDanger}"
-                    Visibility="{Binding IsConfirmingDelete, Converter={StaticResource BoolToVis}}">
-                <StackPanel>
-                    <TextBlock Text="Delete member" Foreground="{StaticResource GymText}" FontWeight="Bold" Margin="0,0,0,6"/>
-                    <TextBlock Foreground="{StaticResource GymTextMuted}" TextWrapping="Wrap" Margin="0,0,0,12">
-                        <TextBlock.Text>
-                            <MultiBinding StringFormat="Delete {0}? This cannot be undone.">
-                                <Binding Path="Member.Name"/>
-                            </MultiBinding>
-                        </TextBlock.Text>
+                    <TextBlock Text="Delete member" Foreground="{StaticResource GymText}" FontSize="20" FontWeight="Bold"/>
+                    <TextBlock Foreground="{StaticResource GymTextMuted}" FontSize="14" TextWrapping="Wrap" Margin="0,12,0,20">
+                        <Run Text="Delete "/><Run Text="{Binding Member.Name, Mode=OneWay}"/><Run Text="? This cannot be undone."/>
                     </TextBlock>
-                    <WrapPanel>
-                        <Button Content="Delete" Command="{Binding ConfirmDeleteCommand}" Margin="0,0,8,0" Padding="14,8" Foreground="{StaticResource GymDanger}"/>
-                        <Button Content="Cancel" Command="{Binding CancelDeleteCommand}" Padding="14,8"/>
-                    </WrapPanel>
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                        <Button Content="Cancel" Command="{Binding CancelDeleteCommand}" Style="{StaticResource GymTextButton}"/>
+                        <Button Content="Delete" Command="{Binding ConfirmDeleteCommand}" Style="{StaticResource GymTextButton}" Foreground="{StaticResource GymDanger}"/>
+                    </StackPanel>
                 </StackPanel>
             </Border>
+        </Grid>
 
-            <WrapPanel Visibility="{Binding IsConfirmingDelete, Converter={StaticResource InverseBoolToVis}}">
-                <Button Content="Renew" Command="{Binding RenewCommand}" Margin="0,0,8,8" Padding="14,8"/>
-                <Button Content="Edit" Command="{Binding EditCommand}" Margin="0,0,8,8" Padding="14,8"/>
-                <Button Content="Enroll Fingerprint" Command="{Binding EnrollFingerprintCommand}" Margin="0,0,8,8" Padding="14,8"/>
-                <Button Content="Attendance History" Command="{Binding ViewAttendanceHistoryCommand}" Margin="0,0,8,8" Padding="14,8"/>
-                <Button Content="Delete" Command="{Binding RequestDeleteCommand}" Margin="0,0,8,8" Padding="14,8" Foreground="{StaticResource GymDanger}"/>
-                <Button Content="Back" Command="{Binding BackCommand}" Margin="0,0,8,8" Padding="14,8"/>
-            </WrapPanel>
-        </StackPanel>
-    </ScrollViewer>
+        <!-- "Remove fingerprint" AlertDialog -->
+        <Grid Background="{StaticResource GymScrim}" Visibility="{Binding IsConfirmingRemoveFingerprint, Converter={StaticResource BoolToVis}}">
+            <Border Background="{StaticResource GymSurfaceCard}" CornerRadius="24" Padding="24" MaxWidth="340" HorizontalAlignment="Center" VerticalAlignment="Center" Margin="24">
+                <StackPanel>
+                    <TextBlock Text="Remove fingerprint" Foreground="{StaticResource GymText}" FontSize="20" FontWeight="Bold"/>
+                    <TextBlock Foreground="{StaticResource GymTextMuted}" FontSize="14" TextWrapping="Wrap" Margin="0,12,0,20">
+                        <Run Text="Remove "/><Run Text="{Binding Member.Name, Mode=OneWay}"/><Run Text="'s enrolled fingerprint? They'll need to re-enroll to check in by fingerprint again."/>
+                    </TextBlock>
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                        <Button Content="Cancel" Command="{Binding CancelRemoveFingerprintCommand}" Style="{StaticResource GymTextButton}"/>
+                        <Button Content="Remove" Command="{Binding ConfirmRemoveFingerprintCommand}" Style="{StaticResource GymTextButton}" Foreground="{StaticResource GymDanger}"/>
+                    </StackPanel>
+                </StackPanel>
+            </Border>
+        </Grid>
+    </Grid>
 </UserControl>

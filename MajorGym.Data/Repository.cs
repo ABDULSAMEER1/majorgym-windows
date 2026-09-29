@@ -54,6 +54,21 @@ public sealed class Repository
         return result;
     }
 
+    /// <summary>Android parity: <c>MemberDao.getAll()</c> — <c>SELECT * FROM members ORDER BY
+    /// name ASC</c> (SQLite's default BINARY collation, exactly what Room uses), which is what
+    /// every member list screen (Members, Total/Active/Expiring/Expired/Due) is built from.
+    /// <see cref="GetAll"/> above stays unordered because Android's <c>allOnce()</c> (used by
+    /// backup export and the archival sweep) is unordered too.</summary>
+    public List<Member> GetAllByName()
+    {
+        using var cmd = _db.Connection.CreateCommand();
+        cmd.CommandText = "SELECT * FROM members ORDER BY name ASC";
+        using var reader = cmd.ExecuteReader();
+        var result = new List<Member>();
+        while (reader.Read()) result.Add(DecryptedForApp(ReadMember(reader)));
+        return result;
+    }
+
     public Member? GetById(string id)
     {
         using var cmd = _db.Connection.CreateCommand();
@@ -91,7 +106,7 @@ public sealed class Repository
         {
             using var tx = _db.Connection.BeginTransaction();
 
-            var existing = GetByIdOnceNoLock(member.Id);
+            var existing = GetByIdOnceNoLock(member.Id, tx);
             var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
             var toStore = member.UpdatedAtMillis > 0 ? member : CloneWithUpdatedAt(member, now);
 
@@ -726,9 +741,10 @@ public sealed class Repository
 
     // ---------------- Internal helpers ----------------
 
-    private Member? GetByIdOnceNoLock(string id)
+    private Member? GetByIdOnceNoLock(string id, SqliteTransaction? tx = null)
     {
         using var cmd = _db.Connection.CreateCommand();
+        cmd.Transaction = tx;
         cmd.CommandText = "SELECT * FROM members WHERE id = $id";
         cmd.Parameters.AddWithValue("$id", id);
         using var reader = cmd.ExecuteReader();

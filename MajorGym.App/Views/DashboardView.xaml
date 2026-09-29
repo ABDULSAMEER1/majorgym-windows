@@ -3,7 +3,7 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
     <ScrollViewer Padding="16,20,16,90">
         <StackPanel>
-            <TextBlock Text="MAJOR GYM" Style="{StaticResource GymHeading}" Margin="0,0,0,16"/>
+            <TextBlock Text="MAJOR GYM" Style="{StaticResource GymHeaderText}" Margin="0,0,0,16"/>
 
             <UniformGrid Columns="2" Rows="2">
                 <Border Style="{StaticResource GymCard}" Margin="0,0,5,10" Cursor="Hand"

@@ -61,12 +61,13 @@ jobs:
           # Search for the expected exe anywhere under MajorGym.App's bin folder rather
           # than hard-coding a single path, so a future TFM/output-path change doesn't
           # silently break packaging. Excludes the "obj" folder and any x86 output.
-          $matches = Get-ChildItem -Path "MajorGym.App/bin" -Filter $env:EXPECTED_EXE -Recurse -ErrorAction SilentlyContinue |
-            Where-Object { $_.FullName -match "\\$env:BUILD_PLATFORM\\" -and $_.FullName -match "\\$env:BUILD_CONFIGURATION\\" }
+          $matches = Get-ChildItem -Path "MajorGym.App/bin" -Filter $env:EXPECTED_EXE -Recurse -File -ErrorAction SilentlyContinue |
+            Where-Object { $_.FullName -match "\\$env:BUILD_CONFIGURATION\\" -and $_.FullName -notmatch "\\x86\\" } |
+            Sort-Object FullName
 
           if (-not $matches -or $matches.Count -eq 0) {
-            Write-Error "Could not locate $env:EXPECTED_EXE under MajorGym.App/bin for $env:BUILD_PLATFORM/$env:BUILD_CONFIGURATION. Build output layout may have changed."
-            Get-ChildItem -Path "MajorGym.App/bin" -Recurse -ErrorAction SilentlyContinue | Select-Object FullName
+            Write-Error "Could not locate $env:EXPECTED_EXE under MajorGym.App/bin for Release/x64. Build output layout may have changed."
+            Get-ChildItem -Path "MajorGym.App/bin" -Recurse -File -ErrorAction SilentlyContinue | Select-Object FullName
             exit 1
           }
 

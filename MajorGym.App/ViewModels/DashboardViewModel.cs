@@ -14,10 +14,25 @@ namespace MajorGym.App.ViewModels;
 /// </summary>
 public sealed class RelayCommand(Action execute, Func<bool>? canExecute = null) : ICommand
 {
-    public event EventHandler? CanExecuteChanged;
+    /// <summary>
+    /// Phase 1 fix (systematic, not a per-button workaround): this used to be a plain
+    /// auto-event that nothing ever raised, so WPF asked <see cref="CanExecute"/> exactly
+    /// once when the binding was first applied and never again — a Save button whose
+    /// CanExecute depends on validation state (Add/Edit Member) stayed permanently disabled
+    /// after the initial "invalid" check even once every field was valid. Routing the event
+    /// through <see cref="CommandManager.RequerySuggested"/> makes WPF re-query every bound
+    /// command after each input/focus/keyboard event (the standard WPF RelayCommand pattern),
+    /// and <see cref="RaiseCanExecuteChanged"/> forces that re-query immediately for state
+    /// changes that don't come from user input (e.g. the async-style duplicate-phone check).
+    /// </summary>
+    public event EventHandler? CanExecuteChanged
+    {
+        add => CommandManager.RequerySuggested += value;
+        remove => CommandManager.RequerySuggested -= value;
+    }
     public bool CanExecute(object? parameter) => canExecute?.Invoke() ?? true;
     public void Execute(object? parameter) => execute();
-    public void RaiseCanExecuteChanged() => CanExecuteChanged?.Invoke(this, EventArgs.Empty);
+    public void RaiseCanExecuteChanged() => CommandManager.InvalidateRequerySuggested();
 }
 
 /// <summary>

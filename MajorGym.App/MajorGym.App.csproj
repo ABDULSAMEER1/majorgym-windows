@@ -13,6 +13,12 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- Exo 2 header font, copied from the Android app's res/font (SIL OFL 1.1 — license text
+         alongside). Embedded so the Major Gym header typeface travels with the EXE. -->
+    <Resource Include="Assets\Fonts\*.ttf" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\MajorGym.Data\MajorGym.Data.csproj" />
     <ProjectReference Include="..\MajorGym.Fingerprint\MajorGym.Fingerprint.csproj" />
     <ProjectReference Include="..\MajorGym.Kiosk\MajorGym.Kiosk.csproj" />

@@ -1,0 +1,26 @@
+<UserControl x:Class="MajorGym.App.Controls.MemberRowView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <!-- Android's MemberRow: status ring, name, "phone · plan", "Expires date", (Due: amount
+         on the Due Members list only), status badge, Renew pill — the whole row minus the
+         pill opens the profile; the pill alone starts a renewal. -->
+    <Border Background="{StaticResource GymCardGlassGradient}" BorderBrush="{StaticResource GymBorder}" BorderThickness="1" CornerRadius="16" Padding="12">
+        <DockPanel>
+            <StackPanel DockPanel.Dock="Right" HorizontalAlignment="Right" Margin="8,0,0,0">
+                <ctl:StatusBadge xmlns:ctl="clr-namespace:MajorGym.App.Controls" Status="{Binding Status}" HorizontalAlignment="Right"/>
+                <Button Content="Renew" Command="{Binding Renew}" Style="{StaticResource GymRenewPill}" HorizontalAlignment="Right" Margin="0,8,0,0"/>
+            </StackPanel>
+            <StackPanel Orientation="Horizontal" Cursor="Hand">
+                <StackPanel.InputBindings><MouseBinding MouseAction="LeftClick" Command="{Binding OpenProfile}"/></StackPanel.InputBindings>
+                <ctl:StatusRing xmlns:ctl="clr-namespace:MajorGym.App.Controls" PhotoPath="{Binding Member.PhotoPath}" MemberName="{Binding Member.Name}" Status="{Binding Status}" RingSize="48"/>
+                <StackPanel Margin="12,0,0,0" VerticalAlignment="Center">
+                    <TextBlock Text="{Binding Member.Name}" Foreground="{StaticResource GymText}" FontSize="15" FontWeight="SemiBold"/>
+                    <TextBlock Text="{Binding PhonePlanText}" Foreground="{StaticResource GymTextMuted}" FontSize="12" Margin="0,2,0,0"/>
+                    <TextBlock Text="{Binding ExpiresText}" Foreground="{StaticResource GymTextFaint}" FontSize="11"/>
+                    <TextBlock Text="{Binding DueText}" Foreground="{StaticResource GymDanger}" FontSize="11" FontWeight="Bold" Margin="0,2,0,0"
+                               Visibility="{Binding ShowDueLine, Converter={StaticResource BoolToVis}}"/>
+                </StackPanel>
+            </StackPanel>
+        </DockPanel>
+    </Border>
+</UserControl>

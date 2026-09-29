@@ -6,6 +6,10 @@
          Converters.cs. Kept in this shared dictionary rather than duplicated per-view. -->
     <app:NullToVisibilityConverter x:Key="NullToVis"/>
     <app:InverseBoolToVisibilityConverter x:Key="InverseBoolToVis"/>
+    <app:PathToImageConverter x:Key="PathToImage"/>
+    <app:PathExistsToVisibilityConverter x:Key="PathExistsToVis"/>
+    <app:MillisToDateConverter x:Key="DateFormat"/>
+    <app:MoneyConverter x:Key="MoneyFormat"/>
     <!--
         Exact port of Android's GymColors object (ui/Theme.kt) — every hex value below is
         copied verbatim from the golden reference, not approximated. (The Stage 2 draft's
@@ -82,4 +86,257 @@
             </Setter.Value>
         </Setter>
     </Style>
+    <!-- ===================== Phase 1 (Membership) shared Major Gym components =====================
+         Windows counterparts of Android's GymComponents.kt / Screens.kt shared bits: header text,
+         section labels, LabeledField label, gym text fields, primary/secondary/danger buttons,
+         ActionButton, status pill, dialog overlay. Every value mirrors the Android reference. -->
+    <!-- Exo 2 ExtraBold ships with the Android app (res/font, SIL OFL) and is embedded here as a WPF Resource.
+         If WPF can't resolve it, Segoe UI Black is the heavy-weight fallback. The face itself is already
+         ExtraBold, so FontWeight stays Normal (avoids simulated double-bolding). -->
+    <FontFamily x:Key="GymHeaderFont">/Assets/Fonts/#Exo 2 ExtraBold, Segoe UI Black</FontFamily>
+
+    <LinearGradientBrush x:Key="GymHeaderGradient" StartPoint="0,0" EndPoint="0,1">
+        <GradientStop Color="#FFFFFFFF" Offset="0"/>
+        <GradientStop Color="#FFA9DBFF" Offset="0.5"/>
+        <GradientStop Color="#FF3F8CFF" Offset="1"/>
+    </LinearGradientBrush>
+    <LinearGradientBrush x:Key="GymCardGlassGradient" StartPoint="0,0" EndPoint="0,1">
+        <GradientStop Color="#FF141926" Offset="0"/>
+        <GradientStop Color="#FF0D111A" Offset="1"/>
+    </LinearGradientBrush>
+    <SolidColorBrush x:Key="GymSuccessTint" Color="#2410B981"/>
+    <SolidColorBrush x:Key="GymSuccessEdge" Color="#5910B981"/>
+    <SolidColorBrush x:Key="GymDangerTint" Color="#1AEF4444"/>
+    <SolidColorBrush x:Key="GymDangerEdge" Color="#59EF4444"/>
+    <SolidColorBrush x:Key="GymAccentTint" Color="#1A00E0FF"/>
+    <SolidColorBrush x:Key="GymAccentEdge" Color="#5900E0FF"/>
+    <SolidColorBrush x:Key="GymMutedTint" Color="#1A94A3B8"/>
+    <SolidColorBrush x:Key="GymMutedEdge" Color="#5994A3B8"/>
+    <SolidColorBrush x:Key="GymScrim" Color="#99000000"/>
+
+    <!-- GymHeaderText: uppercase, Exo 2 ExtraBold, gradient fill (Android GymHeaderText). -->
+    <Style x:Key="GymHeaderText" TargetType="TextBlock">
+        <Setter Property="FontFamily" Value="{StaticResource GymHeaderFont}"/>
+        <Setter Property="FontWeight" Value="Normal"/>
+        <Setter Property="FontSize" Value="20"/>
+        <Setter Property="Foreground" Value="{StaticResource GymHeaderGradient}"/>
+        <Setter Property="VerticalAlignment" Value="Center"/>
+        <Setter Property="Effect">
+            <Setter.Value><DropShadowEffect Color="#FF1E90FF" BlurRadius="10" ShadowDepth="0" Opacity="0.55"/></Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- GymSectionLabel: 11sp bold faint uppercase caption. -->
+    <Style x:Key="GymSectionLabel" TargetType="TextBlock">
+        <Setter Property="Foreground" Value="{StaticResource GymTextFaint}"/>
+        <Setter Property="FontSize" Value="11"/>
+        <Setter Property="FontWeight" Value="Bold"/>
+    </Style>
+
+    <!-- LabeledField label: accent-coloured 11sp bold caption above a field. -->
+    <Style x:Key="GymFieldLabel" TargetType="TextBlock">
+        <Setter Property="Foreground" Value="{StaticResource GymAccent}"/>
+        <Setter Property="FontSize" Value="11"/>
+        <Setter Property="FontWeight" Value="Bold"/>
+        <Setter Property="Margin" Value="0,0,0,6"/>
+    </Style>
+
+    <Style x:Key="GymFieldError" TargetType="TextBlock">
+        <Setter Property="Foreground" Value="{StaticResource GymDanger}"/>
+        <Setter Property="FontSize" Value="11"/>
+        <Setter Property="Margin" Value="0,4,0,0"/>
+    </Style>
+
+    <!-- OutlinedTextField (gymFieldColors): rounded 10, Surface card fill, accent border on focus. -->
+    <Style x:Key="GymTextBox" TargetType="TextBox">
+        <Setter Property="Foreground" Value="{StaticResource GymText}"/>
+        <Setter Property="CaretBrush" Value="{StaticResource GymAccent}"/>
+        <Setter Property="Background" Value="{StaticResource GymSurfaceCard}"/>
+        <Setter Property="BorderBrush" Value="{StaticResource GymBorder}"/>
+        <Setter Property="BorderThickness" Value="1"/>
+        <Setter Property="Padding" Value="14,13"/>
+        <Setter Property="FontSize" Value="14"/>
+        <Setter Property="VerticalContentAlignment" Value="Center"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="TextBox">
+                    <Border x:Name="Box" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}"
+                            BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="10">
+                        <Grid>
+                            <ScrollViewer x:Name="PART_ContentHost" Margin="{TemplateBinding Padding}" VerticalAlignment="Center"/>
+                            <TextBlock x:Name="Hint" Text="{TemplateBinding Tag}" Foreground="{StaticResource GymTextFaint}" FontSize="14"
+                                       Margin="{TemplateBinding Padding}" VerticalAlignment="Center" IsHitTestVisible="False" Visibility="Collapsed"/>
+                        </Grid>
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsKeyboardFocused" Value="True">
+                            <Setter TargetName="Box" Property="BorderBrush" Value="{StaticResource GymAccent}"/>
+                            <Setter TargetName="Box" Property="Background" Value="{StaticResource GymSurface2}"/>
+                        </Trigger>
+                        <DataTrigger Binding="{Binding Text.Length, RelativeSource={RelativeSource Self}}" Value="0">
+                            <Setter TargetName="Hint" Property="Visibility" Value="Visible"/>
+                        </DataTrigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+    <Style x:Key="GymTextBoxError" TargetType="TextBox" BasedOn="{StaticResource GymTextBox}">
+        <Setter Property="BorderBrush" Value="{StaticResource GymDanger}"/>
+    </Style>
+
+    <!-- PrimaryButton: 52dp gradient, dark label, glow; disabled = Surface3 fill + faint label. -->
+    <Style x:Key="GymPrimaryButtonLarge" TargetType="Button">
+        <Setter Property="Height" Value="52"/>
+        <Setter Property="Foreground" Value="#FF06121A"/>
+        <Setter Property="FontWeight" Value="Bold"/>
+        <Setter Property="FontSize" Value="15"/>
+        <Setter Property="Cursor" Value="Hand"/>
+        <Setter Property="HorizontalContentAlignment" Value="Center"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Button">
+                    <Border x:Name="Bd" Background="{StaticResource GymAccentGradient}" CornerRadius="12">
+                        <Border.Effect><DropShadowEffect Color="#FF00F0FF" BlurRadius="14" ShadowDepth="0" Opacity="0.28"/></Border.Effect>
+                        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" TextElement.Foreground="{TemplateBinding Foreground}"/>
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsEnabled" Value="False">
+                            <Setter TargetName="Bd" Property="Background" Value="{StaticResource GymSurface3}"/>
+                            <Setter TargetName="Bd" Property="Effect" Value="{x:Null}"/>
+                            <Setter Property="Foreground" Value="{StaticResource GymTextFaint}"/>
+                            <Setter Property="Cursor" Value="Arrow"/>
+                        </Trigger>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Bd" Property="Opacity" Value="0.92"/>
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- SecondaryButton (violet outline) -->
+    <Style x:Key="GymSecondaryButton" TargetType="Button">
+        <Setter Property="Height" Value="52"/>
+        <Setter Property="Foreground" Value="{StaticResource GymViolet}"/>
+        <Setter Property="FontWeight" Value="Bold"/>
+        <Setter Property="FontSize" Value="15"/>
+        <Setter Property="Cursor" Value="Hand"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Button">
+                    <Border Background="#1F8B5CF6" BorderBrush="#808B5CF6" BorderThickness="1" CornerRadius="12">
+                        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" TextElement.Foreground="{TemplateBinding Foreground}"/>
+                    </Border>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- Flat text button ("Done", dialog Cancel) -->
+    <Style x:Key="GymTextButton" TargetType="Button">
+        <Setter Property="Foreground" Value="{StaticResource GymTextMuted}"/>
+        <Setter Property="FontWeight" Value="Medium"/>
+        <Setter Property="FontSize" Value="14"/>
+        <Setter Property="Padding" Value="14,8"/>
+        <Setter Property="Cursor" Value="Hand"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Button">
+                    <Border Background="Transparent" CornerRadius="8" Padding="{TemplateBinding Padding}">
+                        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" TextElement.Foreground="{TemplateBinding Foreground}"/>
+                    </Border>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- Outlined button ("Replace"/"Delete" under the ID proof photo) -->
+    <Style x:Key="GymOutlinedButton" TargetType="Button">
+        <Setter Property="Foreground" Value="{StaticResource GymText}"/>
+        <Setter Property="FontSize" Value="13"/>
+        <Setter Property="Padding" Value="12,9"/>
+        <Setter Property="Cursor" Value="Hand"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Button">
+                    <Border Background="Transparent" BorderBrush="{StaticResource GymBorder}" BorderThickness="1" CornerRadius="20" Padding="{TemplateBinding Padding}">
+                        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" TextElement.Foreground="{TemplateBinding Foreground}"/>
+                    </Border>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- ActionButton (Profile): tinted background (10%), coloured 35% border, icon over label.
+         Tag carries the tint/edge colour brushes' base via the Foreground. -->
+    <Style x:Key="GymActionButton" TargetType="Button">
+        <Setter Property="Foreground" Value="{StaticResource GymAccent}"/>
+        <Setter Property="Background" Value="{StaticResource GymAccentTint}"/>
+        <Setter Property="BorderBrush" Value="{StaticResource GymAccentEdge}"/>
+        <Setter Property="Cursor" Value="Hand"/>
+        <Setter Property="Padding" Value="0,14"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Button">
+                    <Border Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="1"
+                            CornerRadius="12" Padding="{TemplateBinding Padding}">
+                        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" TextElement.Foreground="{TemplateBinding Foreground}"/>
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True"><Setter Property="Opacity" Value="0.85"/></Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+    <Style x:Key="GymActionButtonDanger" TargetType="Button" BasedOn="{StaticResource GymActionButton}">
+        <Setter Property="Foreground" Value="{StaticResource GymDanger}"/>
+        <Setter Property="Background" Value="{StaticResource GymDangerTint}"/>
+        <Setter Property="BorderBrush" Value="{StaticResource GymDangerEdge}"/>
+    </Style>
+    <Style x:Key="GymActionButtonMuted" TargetType="Button" BasedOn="{StaticResource GymActionButton}">
+        <Setter Property="Foreground" Value="{StaticResource GymTextMuted}"/>
+        <Setter Property="Background" Value="{StaticResource GymMutedTint}"/>
+        <Setter Property="BorderBrush" Value="{StaticResource GymMutedEdge}"/>
+    </Style>
+
+    <!-- Renew pill on member rows -->
+    <Style x:Key="GymRenewPill" TargetType="Button">
+        <Setter Property="Foreground" Value="{StaticResource GymAccent}"/>
+        <Setter Property="FontSize" Value="11"/>
+        <Setter Property="FontWeight" Value="Bold"/>
+        <Setter Property="Cursor" Value="Hand"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Button">
+                    <Border Background="#2600E0FF" BorderBrush="#7300E0FF" BorderThickness="1" CornerRadius="20" Padding="12,5">
+                        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" TextElement.Foreground="{TemplateBinding Foreground}"/>
+                    </Border>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- Card with the CardGlassGradient fill used by member rows and dashboard stat cards -->
+    <Style x:Key="GymGlassCard" TargetType="Border">
+        <Setter Property="Background" Value="{StaticResource GymCardGlassGradient}"/>
+        <Setter Property="BorderBrush" Value="{StaticResource GymBorder}"/>
+        <Setter Property="BorderThickness" Value="1"/>
+        <Setter Property="CornerRadius" Value="16"/>
+    </Style>
+
+    <!-- Themed DatePicker (Android DatePickerField: rounded 10 card, "dd MMM yyyy"). -->
+    <Style x:Key="GymDatePicker" TargetType="DatePicker">
+        <Setter Property="Foreground" Value="{StaticResource GymText}"/>
+        <Setter Property="Background" Value="{StaticResource GymSurfaceCard}"/>
+        <Setter Property="BorderBrush" Value="{StaticResource GymBorder}"/>
+        <Setter Property="Padding" Value="8,8"/>
+        <Setter Property="FontWeight" Value="Medium"/>
+        <Setter Property="SelectedDateFormat" Value="Short"/>
+    </Style>
+
+    <!-- Themed ScrollViewer thumb is left at the Windows default; the dark theme is carried by
+         the surfaces above. -->
 </ResourceDictionary>

@@ -29,12 +29,18 @@ public sealed class RenewViewModel : INotifyPropertyChanged
     public string Plan { get => _plan; set { _plan = value; OnPropertyChanged(); RecomputeExpiry(); } }
 
     private string _feeText;
-    public string FeeText { get => _feeText; set { _feeText = value; OnPropertyChanged(); } }
+    // Android: fee = it.filter { c -> c.isDigit() }
+    public string FeeText
+    {
+        get => _feeText;
+        set { var c = new string((value ?? "").Where(ch => ch is >= '0' and <= '9').ToArray()); if (_feeText == c) return; _feeText = c; OnPropertyChanged(); }
+    }
 
     private DateTime _startDate;
     public DateTime StartDate { get => _startDate; set { _startDate = value; OnPropertyChanged(); RecomputeExpiry(); } }
 
     public string CurrentExpiryText => $"Expires {DateUtils.FormatDate(Member.ExpiryMillis)}";
+    public MemberStatus Status => MemberStatusExtensions.StatusOf(Member.ExpiryMillis);
 
     private string _newExpiryText = "";
     public string NewExpiryText { get => _newExpiryText; private set { _newExpiryText = value; OnPropertyChanged(); } }
@@ -49,7 +55,7 @@ public sealed class RenewViewModel : INotifyPropertyChanged
         Member = member;
 
         _plan = member.Plan;
-        _feeText = member.Fee > 0 ? ((int)member.Fee).ToString() : "";
+        _feeText = ((long)member.Fee).ToString(); // Android: member.fee.toInt().toString() — shown even when 0
 
         var today = DateUtils.ToMillis(DateOnly.FromDateTime(DateTime.Now));
         var startMillis = member.ExpiryMillis > today ? member.ExpiryMillis : today;

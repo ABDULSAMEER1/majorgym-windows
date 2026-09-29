@@ -27,3 +27,52 @@ public sealed class InverseBoolToVisibilityConverter : IValueConverter
     public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture) =>
         throw new NotSupportedException();
 }
+
+/// <summary>Photo path -&gt; <see cref="System.Windows.Media.ImageSource"/> (null when the
+/// path is blank or the file is gone) via <see cref="BitmapImageUtils.LoadFromFile"/>.</summary>
+public sealed class PathToImageConverter : IValueConverter
+{
+    public object? Convert(object? value, Type targetType, object parameter, CultureInfo culture) =>
+        BitmapImageUtils.LoadFromFile(value as string);
+
+    public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture) =>
+        throw new NotSupportedException();
+}
+
+/// <summary>Visible when the referenced photo file exists on disk, Collapsed otherwise —
+/// Android's <c>path.takeIf { it.isNotBlank() }?.let(::File)?.takeIf { it.exists() }</c>
+/// gate. ConverterParameter="Invert" flips it (show the placeholder while there's no file).</summary>
+public sealed class PathExistsToVisibilityConverter : IValueConverter
+{
+    public object Convert(object? value, Type targetType, object parameter, CultureInfo culture)
+    {
+        var exists = value is string s && !string.IsNullOrWhiteSpace(s) && System.IO.File.Exists(s);
+        if (parameter is "Invert") exists = !exists;
+        return exists ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture) =>
+        throw new NotSupportedException();
+}
+
+/// <summary>Epoch millis -&gt; "dd MMM yyyy" via <see cref="MajorGym.Data.DateUtils.FormatDate"/>.
+/// Used by the History list on Profile (Android: <c>formatDate(h.dateMillis)</c>).</summary>
+public sealed class MillisToDateConverter : IValueConverter
+{
+    public object Convert(object? value, Type targetType, object parameter, CultureInfo culture) =>
+        value is long l ? MajorGym.Data.DateUtils.FormatDate(l) : "";
+
+    public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture) =>
+        throw new NotSupportedException();
+}
+
+/// <summary>A rupee amount -&gt; Android's Indian-grouped money text via
+/// <see cref="MajorGym.Data.DateUtils.FormatMoney"/> (History list's fee column).</summary>
+public sealed class MoneyConverter : IValueConverter
+{
+    public object Convert(object? value, Type targetType, object parameter, CultureInfo culture) =>
+        value is double d ? MajorGym.Data.DateUtils.FormatMoney(d) : "";
+
+    public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture) =>
+        throw new NotSupportedException();
+}

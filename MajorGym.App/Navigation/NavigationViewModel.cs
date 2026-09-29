@@ -36,18 +36,43 @@ public sealed class NavigationViewModel : INotifyPropertyChanged
     }
 
     private Screen _current;
+    private object? _currentViewModel;
+
     public Screen Current
     {
         get => _current;
-        private set { _current = value; OnPropertyChanged(); OnPropertyChanged(nameof(CurrentViewModel)); }
+        private set { _current = value; OnPropertyChanged(); }
     }
 
-    /// <summary>The active screen's ViewModel, re-created fresh on every navigation —
-    /// mirroring Android's own behavior of re-composing a screen's ViewModel-backed state
-    /// from scratch each time its route is entered (Android does not preserve
-    /// AddEditMemberScreen's typed-but-unsaved draft across a back-and-forth navigation,
-    /// for example, and neither does this).</summary>
-    public object? CurrentViewModel => Current switch
+    /// <summary>The active screen's ViewModel. Phase 1 change: this is now built ONCE per
+    /// navigation inside <see cref="NavigateTo"/> and cached, instead of being a computed
+    /// property that constructed a brand-new ViewModel every time it was read. That also lets
+    /// navigation resolve a missing member up front (see <see cref="Resolve"/>) instead of the
+    /// getter returning null — which rendered a blank screen (Registered/Renew/Renewed/etc.)
+    /// or, for Profile/Edit, threw straight out of a ViewModel constructor. Android shows
+    /// nothing for a route whose member no longer exists; a blank window is never an
+    /// acceptable Windows equivalent, so those routes now land on the member list instead.
+    /// Each navigation still re-creates the screen's state from scratch, exactly like
+    /// Android re-composing a route (an un-saved Add Member draft is not preserved across a
+    /// back-and-forth, in either app).</summary>
+    public object? CurrentViewModel => _currentViewModel ??= BuildViewModel(_current);
+
+    /// <summary>Screens that need a live member. If that member is gone (deleted from another
+    /// screen/device in between), returns the screen to show instead.</summary>
+    private Screen Resolve(Screen screen) => screen switch
+    {
+        Screen.Edit e when _repository.GetById(e.MemberId) is null => new Screen.Members(),
+        Screen.Profile p when _repository.GetById(p.MemberId) is null => new Screen.Members(),
+        Screen.Registered r when _repository.GetById(r.MemberId) is null => new Screen.Members(),
+        Screen.Renew rn when _repository.GetById(rn.MemberId) is null => new Screen.Members(),
+        Screen.Renewed rd when _repository.GetById(rd.MemberId) is null => new Screen.Members(),
+        Screen.EnrollFingerprint ef when _repository.GetById(ef.MemberId) is null => new Screen.Members(),
+        Screen.AttendanceHistory ah when _repository.GetById(ah.MemberId) is null => new Screen.AttendanceLogs(),
+        Screen.ArchivedMemberDetail amd when _repository.GetArchivedMemberById(amd.MemberId) is null => new Screen.ExpiredArchive(),
+        _ => screen
+    };
+
+    private object? BuildViewModel(Screen screen) => screen switch
     {
         Screen.Dashboard => new ViewModels.DashboardViewModel(_repository, this),
         Screen.Members => new ViewModels.MembersViewModel(_repository, this),
@@ -56,15 +81,9 @@ public sealed class NavigationViewModel : INotifyPropertyChanged
         Screen.Profile p => new ViewModels.ProfileViewModel(_repository, this, p.MemberId),
 
         // ---- Added in Stage 4 (Member workflow) ----
-        Screen.Registered r => RequireMember(r.MemberId) is { } m
-            ? new ViewModels.RegisteredViewModel(this, m, r.Passkey)
-            : null,
-        Screen.Renew rn => RequireMember(rn.MemberId) is { } m
-            ? new ViewModels.RenewViewModel(_repository, this, m)
-            : null,
-        Screen.Renewed rd => RequireMember(rd.MemberId) is { } m
-            ? new ViewModels.RenewedViewModel(this, m, rd.JustRenewed)
-            : null,
+        Screen.Registered r => new ViewModels.RegisteredViewModel(this, RequireMember(r.MemberId), r.Passkey),
+        Screen.Renew rn => new ViewModels.RenewViewModel(_repository, this, RequireMember(rn.MemberId)),
+        Screen.Renewed rd => new ViewModels.RenewedViewModel(this, RequireMember(rd.MemberId), rd.JustRenewed),
         Screen.TotalMembers => new ViewModels.FilteredMembersViewModel(_repository, this, ViewModels.FilteredMembersKind.Total),
         Screen.ActiveMembers => new ViewModels.FilteredMembersViewModel(_repository, this, ViewModels.FilteredMembersKind.Active),
         Screen.ExpiringMembers => new ViewModels.FilteredMembersViewModel(_repository, this, ViewModels.FilteredMembersKind.Expiring),
@@ -74,34 +93,28 @@ public sealed class NavigationViewModel : INotifyPropertyChanged
         // ---- Added in Stage 4b (Attendance / Backup / Fingerprint / Archive workflows) ----
         Screen.Attendance => new ViewModels.AttendanceViewModel(this),
         Screen.AttendanceLogs => new ViewModels.AttendanceLogsViewModel(_repository, this),
-        Screen.AttendanceHistory ah => RequireMember(ah.MemberId) is { } ahm
-            ? new ViewModels.AttendanceHistoryViewModel(_repository, this, ahm)
-            : null,
-        Screen.EnrollFingerprint ef => RequireMember(ef.MemberId) is { } efm
-            ? new ViewModels.EnrollFingerprintViewModel(_repository, this, efm, ef.ReturnTo)
-            : null,
+        Screen.AttendanceHistory ah => new ViewModels.AttendanceHistoryViewModel(_repository, this, RequireMember(ah.MemberId)),
+        Screen.EnrollFingerprint ef => new ViewModels.EnrollFingerprintViewModel(_repository, this, RequireMember(ef.MemberId), ef.ReturnTo),
         Screen.Backup => new ViewModels.BackupViewModel(_repository, this),
         Screen.BackupHistory => new ViewModels.BackupHistoryViewModel(this),
         Screen.ExpiredArchive => new ViewModels.ExpiredArchiveViewModel(_repository, this),
-        Screen.ArchivedMemberDetail amd => _repository.GetArchivedMemberById(amd.MemberId) is { } archived
-            ? new ViewModels.ArchivedMemberDetailViewModel(_repository, this, archived)
-            : null,
+        Screen.ArchivedMemberDetail amd => new ViewModels.ArchivedMemberDetailViewModel(_repository, this, _repository.GetArchivedMemberById(amd.MemberId)!),
 
-        _ => null // Not yet implemented in this stage — see the Stage 4b report for the full list.
+        _ => new ViewModels.DashboardViewModel(_repository, this) // Sync: not implemented in this project — never a blank screen
     };
 
-    /// <summary>A member referenced by a navigation argument (Registered/Renew/Renewed) can
-    /// no longer exist if they were deleted from another screen/device in between. Returns
-    /// null rather than throwing in that case — deliberately NOT calling NavigateTo here to
-    /// redirect, since this is evaluated from inside the CurrentViewModel getter itself and
-    /// mutating Current mid-read would be reentrant. The View layer treats a null
-    /// CurrentViewModel as "render nothing" (see MainWindow.xaml's ContentControl), which is
-    /// an accepted, explicitly-flagged gap for this edge case rather than a graceful
-    /// redirect — a real fix (bounce back to Dashboard) belongs in a later stage's
-    /// navigation-hardening pass, not bolted on here as a side effect of a property getter.</summary>
-    private Member? RequireMember(string memberId) => _repository.GetById(memberId);
+    /// <summary>Only ever called for a screen <see cref="Resolve"/> has already confirmed has
+    /// a live member, so this cannot return null in practice.</summary>
+    private Member RequireMember(string memberId) =>
+        _repository.GetById(memberId) ?? throw new InvalidOperationException($"Member {memberId} not found");
 
-    public void NavigateTo(Screen screen) => Current = screen;
+    public void NavigateTo(Screen screen)
+    {
+        var resolved = Resolve(screen);
+        _currentViewModel = BuildViewModel(resolved);
+        Current = resolved;
+        OnPropertyChanged(nameof(CurrentViewModel));
+    }
 
     public event PropertyChangedEventHandler? PropertyChanged;
     private void OnPropertyChanged([CallerMemberName] string? name = null) =>

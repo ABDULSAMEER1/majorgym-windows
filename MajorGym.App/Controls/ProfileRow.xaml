@@ -1,0 +1,13 @@
+<UserControl x:Class="MajorGym.App.Controls.ProfileRow"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <!-- Android's ProfileRow composable: label (faint) left, value (semibold, optionally
+         colour-coded) right, a hairline divider beneath unless this is the last row. -->
+    <StackPanel>
+        <DockPanel Margin="0,10">
+            <TextBlock x:Name="LabelText" DockPanel.Dock="Left" Foreground="{StaticResource GymTextFaint}" FontSize="13"/>
+            <TextBlock x:Name="ValueText" DockPanel.Dock="Right" FontSize="13" FontWeight="SemiBold" Foreground="{StaticResource GymText}" HorizontalAlignment="Right"/>
+        </DockPanel>
+        <Border x:Name="Divider" Height="1" Background="{StaticResource GymBorderSubtle}"/>
+    </StackPanel>
+</UserControl>

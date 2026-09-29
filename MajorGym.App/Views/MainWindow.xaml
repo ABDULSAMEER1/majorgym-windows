@@ -43,14 +43,16 @@
 
         <ContentControl Grid.Row="0" Content="{Binding CurrentViewModel}"/>
 
-        <!-- Bottom nav — 4 items, matching Android's BottomNav (Dashboard / Attendance
-             Logs / Backup / Sync — Stage 1 report §1.1). Attendance Logs and Backup are
-             implemented as of Stage 4b; Sync remains explicitly out of scope (brief §16 —
-             LAN transport stays a Stage 2/3 boundary/stub) so its button stays disabled. -->
+        <!-- Major Gym primary navigation: Dashboard / Attendance / Add / Backup / Sync.
+             Add is a first-class navigation action (not only a Dashboard shortcut), matching
+             the final Windows navigation requirement. Sync remains visibly present but disabled
+             until the LAN transport implementation is completed; it must not navigate to a
+             fake/blank screen. -->
         <Border Grid.Row="1" Background="{StaticResource GymSurface}" BorderBrush="{StaticResource GymBorder}" BorderThickness="0,1,0,0">
-            <UniformGrid Columns="4" Height="64">
+            <UniformGrid Columns="5" Height="72">
                 <Button Content="Dashboard" Click="NavDashboard_Click" Background="Transparent" BorderThickness="0" Foreground="{StaticResource GymText}"/>
-                <Button Content="Attendance Logs" Click="NavAttendanceLogs_Click" Background="Transparent" BorderThickness="0" Foreground="{StaticResource GymText}"/>
+                <Button Content="Attendance" Click="NavAttendance_Click" Background="Transparent" BorderThickness="0" Foreground="{StaticResource GymText}"/>
+                <Button Content="Add" Click="NavAdd_Click" Background="Transparent" BorderThickness="0" Foreground="{StaticResource GymText}"/>
                 <Button Content="Backup" Click="NavBackup_Click" Background="Transparent" BorderThickness="0" Foreground="{StaticResource GymText}"/>
                 <Button Content="Sync" Background="Transparent" BorderThickness="0" Foreground="{StaticResource GymTextFaint}" IsEnabled="False"/>
             </UniformGrid>

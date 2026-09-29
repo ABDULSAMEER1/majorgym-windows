@@ -1,34 +1,30 @@
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Windows.Input;
-using System.Windows.Media;
 using MajorGym.App.Navigation;
 using MajorGym.Data;
-using MajorGym.Data.Entities;
 
 namespace MajorGym.App.ViewModels;
 
-/// <summary>One row in the Members list, pre-computed so the view's DataTemplate stays
-/// simple XAML bindings rather than converters — same idea as Android's <c>MemberRow</c>
-/// composable receiving a plain <c>Member</c> and computing status/ring color itself.</summary>
-public sealed class MemberRowViewModel
-{
-    public required Member Member { get; init; }
-    public required string StatusText { get; init; }
-    public required Brush StatusBrush { get; init; }
-    public required ICommand OpenProfile { get; init; }
-}
-
 /// <summary>
-/// Ported from Android's <c>MembersScreen</c> composable (Screens.kt) — full member list
-/// with a live search box filtering by name or phone, each row navigating to
-/// <see cref="Screen.Profile"/> on click, same as Android's <c>onNavigate(Screen.Profile(m.id))</c>.
+/// Ported from Android's <c>MembersScreen</c> composable (Screens.kt ~778-802) — full member
+/// list with a live search box filtering by name, phone, OR ID proof (Android:
+/// <c>it.name.contains(query, ignoreCase = true) || it.phone.contains(query) ||
+/// it.idProof.contains(query, ignoreCase = true)</c>), each row the shared
+/// <see cref="MemberRowViewModel"/>/Controls/MemberRowView Android's own MemberRow doc
+/// comment says is reused across every member list in the app.
+///
+/// Phase 1 fixes over the earlier Windows port: ID proof was not searchable at all; the list
+/// was sorted with .NET's culture-aware string comparer instead of the SQLite
+/// <c>ORDER BY name ASC</c> (BINARY collation) Android's own <c>MemberDao.getAll()</c> uses —
+/// <see cref="Repository.GetAllByName"/> now does the ordering in SQL so the two match
+/// exactly; and the row itself was a bare name/phone/status line missing the ring, plan,
+/// expiry date, and Renew shortcut Android's MemberRow always shows.
 /// </summary>
 public sealed class MembersViewModel : INotifyPropertyChanged
 {
-    private readonly Repository _repository;
+    private readonly List<Data.Entities.Member> _all;
     private readonly NavigationViewModel _nav;
-    private readonly List<Member> _all;
 
     public ObservableCollection<MemberRowViewModel> Rows { get; } = new();
 
@@ -43,9 +39,8 @@ public sealed class MembersViewModel : INotifyPropertyChanged
 
     public MembersViewModel(Repository repository, NavigationViewModel nav)
     {
-        _repository = repository;
         _nav = nav;
-        _all = _repository.GetAll().OrderBy(m => m.Name).ToList();
+        _all = repository.GetAllByName();
         AddMemberCommand = new RelayCommand(() => _nav.NavigateTo(new Screen.Add()));
         ApplyFilter();
     }
@@ -57,32 +52,10 @@ public sealed class MembersViewModel : INotifyPropertyChanged
         var filtered = string.IsNullOrEmpty(query)
             ? _all
             : _all.Where(m => m.Name.Contains(query, StringComparison.OrdinalIgnoreCase)
-                            || m.Phone.Contains(query, StringComparison.OrdinalIgnoreCase));
+                            || m.Phone.Contains(query, StringComparison.OrdinalIgnoreCase)
+                            || m.IdProof.Contains(query, StringComparison.OrdinalIgnoreCase));
 
-        foreach (var m in filtered)
-        {
-            var status = MemberStatusExtensions.StatusOf(m.ExpiryMillis);
-            var id = m.Id;
-            Rows.Add(new MemberRowViewModel
-            {
-                Member = m,
-                StatusText = status switch
-                {
-                    MemberStatus.ACTIVE => "Active",
-                    MemberStatus.EXPIRING => "Expiring Soon",
-                    MemberStatus.EXPIRED => "Expired",
-                    _ => "Unknown"
-                },
-                StatusBrush = status switch
-                {
-                    MemberStatus.ACTIVE => new SolidColorBrush(Color.FromRgb(0x10, 0xB9, 0x81)),   // GymSuccess
-                    MemberStatus.EXPIRING => new SolidColorBrush(Color.FromRgb(0xF5, 0x9E, 0x0B)),  // GymWarning
-                    MemberStatus.EXPIRED => new SolidColorBrush(Color.FromRgb(0xEF, 0x44, 0x44)),   // GymDanger
-                    _ => new SolidColorBrush(Color.FromRgb(0x94, 0xA3, 0xB8))                       // GymTextMuted
-                },
-                OpenProfile = new RelayCommand(() => _nav.NavigateTo(new Screen.Profile(id)))
-            });
-        }
+        foreach (var m in filtered) Rows.Add(MemberRowViewModel.For(m, _nav));
     }
 
     public event PropertyChangedEventHandler? PropertyChanged;

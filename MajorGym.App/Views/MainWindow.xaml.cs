@@ -14,8 +14,11 @@ public partial class MainWindow : Window
     private void NavDashboard_Click(object sender, RoutedEventArgs e) =>
         App.Nav.NavigateTo(new Screen.Dashboard());
 
-    private void NavAttendanceLogs_Click(object sender, RoutedEventArgs e) =>
-        App.Nav.NavigateTo(new Screen.AttendanceLogs());
+    private void NavAttendance_Click(object sender, RoutedEventArgs e) =>
+        App.Nav.NavigateTo(new Screen.Attendance());
+
+    private void NavAdd_Click(object sender, RoutedEventArgs e) =>
+        App.Nav.NavigateTo(new Screen.Add());
 
     private void NavBackup_Click(object sender, RoutedEventArgs e) =>
         App.Nav.NavigateTo(new Screen.Backup());
