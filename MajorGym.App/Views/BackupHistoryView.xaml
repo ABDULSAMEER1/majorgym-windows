@@ -1,28 +1,46 @@
 <UserControl x:Class="MajorGym.App.Views.BackupHistoryView"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <!-- Mirrors Android BackupHistoryScreen: back arrow + "BACKUP HISTORY" (20sp), one card per
+         backup (History icon + date left, time right), "No backups taken yet." empty state. -->
     <Grid Background="{StaticResource GymBg}">
-        <Grid.RowDefinitions>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="*"/>
-        </Grid.RowDefinitions>
-        <StackPanel Grid.Row="0" Margin="20,20,20,12" Orientation="Horizontal">
-            <Button Content="&#8592;" Command="{Binding BackCommand}" Background="Transparent" BorderThickness="0" Foreground="{StaticResource GymTextMuted}" Margin="0,0,12,0"/>
-            <TextBlock Text="Backup History" Style="{StaticResource GymHeading}"/>
+        <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+        <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="16,20,16,16">
+            <Button Command="{Binding BackCommand}" Style="{StaticResource GymTextButton}" Padding="6,4" VerticalAlignment="Center">
+                <TextBlock Text="&#xE72B;" FontFamily="{StaticResource GymIconFont}" FontSize="18" Foreground="{StaticResource GymText}"/>
+            </Button>
+            <TextBlock Text="BACKUP HISTORY" Style="{StaticResource GymHeaderText}" FontSize="20" Margin="12,0,0,0"/>
         </StackPanel>
-        <TextBlock Grid.Row="1" Text="No backups recorded yet." Style="{StaticResource GymBody}"
-                   HorizontalAlignment="Center" VerticalAlignment="Center"
-                   Visibility="{Binding IsEmpty, Converter={StaticResource BoolToVis}}"/>
-        <ScrollViewer Grid.Row="1">
-            <ItemsControl ItemsSource="{Binding Entries}" Margin="20,0,20,20">
-                <ItemsControl.ItemTemplate>
-                    <DataTemplate>
-                        <Border Style="{StaticResource GymCard}" Margin="0,0,0,8">
-                            <TextBlock Text="{Binding}" Foreground="{StaticResource GymText}"/>
-                        </Border>
-                    </DataTemplate>
-                </ItemsControl.ItemTemplate>
-            </ItemsControl>
+
+        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
+            <StackPanel Margin="16,0,16,24">
+                <ItemsControl ItemsSource="{Binding Entries}">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <Border Background="{StaticResource GymSurfaceCard}" BorderBrush="{StaticResource GymBorder}" BorderThickness="1"
+                                    CornerRadius="12" Padding="14,12" Margin="0,0,0,8">
+                                <Grid>
+                                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                        <TextBlock Text="&#xE81C;" FontFamily="{StaticResource GymIconFont}" FontSize="16" Foreground="{StaticResource GymAccent}" VerticalAlignment="Center"/>
+                                        <TextBlock Text="{Binding DateText}" Foreground="{StaticResource GymText}" FontSize="13" FontWeight="Medium" Margin="8,0,0,0"/>
+                                    </StackPanel>
+                                    <TextBlock Text="{Binding TimeText}" Foreground="{StaticResource GymTextMuted}" FontSize="13" HorizontalAlignment="Right"/>
+                                </Grid>
+                            </Border>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+
+                <!-- Empty state (Android GymEmptyState): icon in a circle + text -->
+                <StackPanel HorizontalAlignment="Center" Margin="0,60,0,0"
+                            Visibility="{Binding IsEmpty, Converter={StaticResource BoolToVis}}">
+                    <Border Width="64" Height="64" CornerRadius="32" Background="{StaticResource GymSurface2}" HorizontalAlignment="Center">
+                        <TextBlock Text="&#xE81C;" FontFamily="{StaticResource GymIconFont}" FontSize="26" Foreground="{StaticResource GymTextFaint}"
+                                   HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                    </Border>
+                    <TextBlock Text="No backups taken yet." Foreground="{StaticResource GymTextFaint}" FontSize="13" Margin="0,14,0,0" HorizontalAlignment="Center"/>
+                </StackPanel>
+            </StackPanel>
         </ScrollViewer>
     </Grid>
 </UserControl>

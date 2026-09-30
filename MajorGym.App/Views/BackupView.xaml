@@ -1,62 +1,116 @@
 <UserControl x:Class="MajorGym.App.Views.BackupView"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
-    <ScrollViewer Background="{StaticResource GymBg}">
-        <StackPanel Margin="20">
-            <Button Content="&#8592; Back" Command="{Binding BackCommand}" HorizontalAlignment="Left"
-                    Background="Transparent" BorderThickness="0" Foreground="{StaticResource GymTextMuted}" Margin="0,0,0,12"/>
-            <TextBlock Text="Backup" Style="{StaticResource GymHeading}" Margin="0,0,0,4"/>
-            <TextBlock Text="Local backups only — nothing is uploaded anywhere." Style="{StaticResource GymBody}" Margin="0,0,0,16" TextWrapping="Wrap"/>
+    <!-- Mirrors Android BackupScreen: title, scanner card, Export / Restore / Share / History cards. -->
+    <ScrollViewer Background="{StaticResource GymBg}" VerticalScrollBarVisibility="Auto">
+        <StackPanel Margin="16,20,16,24">
+            <TextBlock Text="BACKUP &amp; RESTORE" Style="{StaticResource GymHeaderText}" FontSize="22"/>
+            <Border Height="20"/>
 
-            <Border Style="{StaticResource GymCard}" Margin="0,0,0,12">
-                <StackPanel>
-                    <TextBlock Text="Create Backup" Foreground="{StaticResource GymText}" FontWeight="SemiBold" Margin="0,0,0,8"/>
-                    <TextBlock Text="Saves every member, attendance record, and archived member (including photos and fingerprint data) into one file you choose." Style="{StaticResource GymBody}" TextWrapping="Wrap" Margin="0,0,0,12"/>
-                    <Button Content="Export Backup" Command="{Binding ExportCommand}" Style="{StaticResource GymPrimaryButton}"/>
-                    <Button Content="Share Backup File" Command="{Binding ShareCommand}" Background="Transparent" BorderThickness="1"
-                            BorderBrush="{StaticResource GymBorder}" Foreground="{StaticResource GymAccent}" Margin="0,8,0,0" Padding="16,10"
-                            Visibility="{Binding CanShare, Converter={StaticResource BoolToVis}}"/>
-                </StackPanel>
-            </Border>
-
-            <Border Style="{StaticResource GymCard}" Margin="0,0,0,12">
-                <StackPanel>
-                    <TextBlock Text="Restore Backup" Foreground="{StaticResource GymText}" FontWeight="SemiBold" Margin="0,0,0,8"/>
-                    <TextBlock Text="Choose a previously-saved backup file (.zip or .json) to restore from." Style="{StaticResource GymBody}" TextWrapping="Wrap" Margin="0,0,0,12"/>
-                    <Button Content="Import Backup" Command="{Binding RequestImportCommand}" Background="Transparent" BorderThickness="1"
-                            BorderBrush="{StaticResource GymBorder}" Foreground="{StaticResource GymText}" Padding="16,10"/>
-
-                    <Border Background="{StaticResource GymSurface2}" CornerRadius="12" Padding="16" Margin="0,12,0,0"
-                            Visibility="{Binding IsConfirmingImport, Converter={StaticResource BoolToVis}}">
-                        <StackPanel>
-                            <TextBlock Text="Restore this backup?" Foreground="{StaticResource GymText}" FontWeight="SemiBold"/>
-                            <TextBlock Text="Members, attendance, and archived members from this file will be added to (or merged with) what's already on this PC. This cannot be undone."
-                                       Style="{StaticResource GymBody}" TextWrapping="Wrap" Margin="0,8,0,12"/>
-                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
-                                <Button Content="Cancel" Command="{Binding CancelImportCommand}" Background="Transparent" BorderThickness="0" Foreground="{StaticResource GymTextMuted}" Margin="0,0,16,0"/>
-                                <Button Content="Restore" Command="{Binding ConfirmImportCommand}" Background="{StaticResource GymDanger}" Foreground="White" BorderThickness="0" Padding="16,8"/>
-                            </StackPanel>
-                        </StackPanel>
+            <!-- Open Attendance Scanner (glass card, cyan glow border, gradient icon tile, chevron) -->
+            <Border Style="{StaticResource GymGlassCard}" BorderBrush="{StaticResource GymBorderGlowCyan}" Padding="16" Cursor="Hand">
+                <Border.Effect><DropShadowEffect Color="#FF00F0FF" BlurRadius="16" ShadowDepth="0" Opacity="0.20"/></Border.Effect>
+                <Border.InputBindings><MouseBinding MouseAction="LeftClick" Command="{Binding OpenAttendanceCommand}"/></Border.InputBindings>
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <Border Grid.Column="0" Width="44" Height="44" CornerRadius="12" Background="{StaticResource GymAccentGradient}">
+                        <Viewbox Width="22" Height="22">
+                            <Canvas Width="24" Height="24">
+                                <Path Stroke="#FF06121A" StrokeThickness="2.4" StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                                      Data="M3,9 V3 H9 M15,3 H21 V9 M21,15 V21 H15 M9,21 H3 V15"/>
+                                <Rectangle Canvas.Left="8" Canvas.Top="8" Width="8" Height="8" RadiusX="1.5" RadiusY="1.5" Fill="#FF06121A"/>
+                            </Canvas>
+                        </Viewbox>
                     </Border>
+                    <StackPanel Grid.Column="1" Margin="14,0,0,0" VerticalAlignment="Center">
+                        <TextBlock Text="Open Attendance Scanner" Foreground="{StaticResource GymText}" FontSize="15" FontWeight="SemiBold"/>
+                        <TextBlock Text="Scan member QR codes and manage check-ins" Foreground="{StaticResource GymTextFaint}" FontSize="12" Margin="0,2,0,0" TextWrapping="Wrap"/>
+                    </StackPanel>
+                    <TextBlock Grid.Column="2" Text="&#xE76C;" FontFamily="{StaticResource GymIconFont}" FontSize="16"
+                               Foreground="{StaticResource GymTextFaint}" VerticalAlignment="Center"/>
+                </Grid>
+            </Border>
+            <Border Height="14"/>
+
+            <!-- Export All Records -->
+            <Border Style="{StaticResource GymCard}">
+                <StackPanel>
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="&#xE896;" FontFamily="{StaticResource GymIconFont}" FontSize="18" Foreground="{StaticResource GymAccent}" VerticalAlignment="Center"/>
+                        <TextBlock Text="Export All Records" Foreground="{StaticResource GymText}" FontWeight="Bold" Margin="8,0,0,0" VerticalAlignment="Center"/>
+                    </StackPanel>
+                    <Border Height="12"/>
+                    <Button Content="{Binding ExportLabel}" Command="{Binding ExportCommand}" Style="{StaticResource GymPrimaryButton44}"
+                            FontFamily="{StaticResource GymHeaderFontBold}"/>
+                </StackPanel>
+            </Border>
+            <Border Height="14"/>
+
+            <!-- Restore Records -->
+            <Border Style="{StaticResource GymCard}">
+                <StackPanel>
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="&#xE898;" FontFamily="{StaticResource GymIconFont}" FontSize="18" Foreground="{StaticResource GymAccent}" VerticalAlignment="Center"/>
+                        <TextBlock Text="Restore Records" Foreground="{StaticResource GymText}" FontWeight="Bold" Margin="8,0,0,0" VerticalAlignment="Center"/>
+                    </StackPanel>
+                    <Border Height="12"/>
+                    <Button Content="{Binding RestoreLabel}" Command="{Binding ImportCommand}" Style="{StaticResource GymSecondaryButton44}"/>
                 </StackPanel>
             </Border>
 
-            <TextBlock Text="{Binding StatusMessage}" TextWrapping="Wrap" Margin="0,0,0,12"
-                       Visibility="{Binding StatusMessage, Converter={StaticResource NullToVis}}">
+            <!-- Export/Restore result message (Success green / Danger red, 12sp, centred) -->
+            <TextBlock Text="{Binding Message}" FontSize="12" TextWrapping="Wrap" TextAlignment="Center" Margin="0,16,0,0"
+                       Visibility="{Binding HasMessage, Converter={StaticResource BoolToVis}}">
                 <TextBlock.Style>
                     <Style TargetType="TextBlock">
                         <Setter Property="Foreground" Value="{StaticResource GymSuccess}"/>
                         <Style.Triggers>
-                            <DataTrigger Binding="{Binding IsError}" Value="True">
+                            <DataTrigger Binding="{Binding MessageIsError}" Value="True">
                                 <Setter Property="Foreground" Value="{StaticResource GymDanger}"/>
                             </DataTrigger>
                         </Style.Triggers>
                     </Style>
                 </TextBlock.Style>
             </TextBlock>
+            <Border Height="14"/>
 
-            <Button Content="Backup History" Command="{Binding GoHistoryCommand}" Background="Transparent" BorderThickness="0"
-                    Foreground="{StaticResource GymAccent}" HorizontalAlignment="Left"/>
+            <!-- Share Backup File -->
+            <Border Style="{StaticResource GymCard}">
+                <StackPanel>
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="&#xE72D;" FontFamily="{StaticResource GymIconFont}" FontSize="18" Foreground="{StaticResource GymAccent}" VerticalAlignment="Center"/>
+                        <TextBlock Text="Share Backup File" Foreground="{StaticResource GymText}" FontWeight="Bold" Margin="8,0,0,0" VerticalAlignment="Center"/>
+                    </StackPanel>
+                    <Border Height="10"/>
+                    <Border Background="{StaticResource GymSurface2}" CornerRadius="8" Padding="10" Margin="0,0,0,10"
+                            Visibility="{Binding HasLatestBackup, Converter={StaticResource BoolToVis}}">
+                        <StackPanel>
+                            <TextBlock Text="{Binding LatestBackupName}" Foreground="{StaticResource GymText}" FontSize="11" FontWeight="Medium" TextWrapping="Wrap"/>
+                            <TextBlock Text="{Binding LatestBackupDetail}" Foreground="{StaticResource GymTextFaint}" FontSize="10" Margin="0,2,0,0"/>
+                        </StackPanel>
+                    </Border>
+                    <Button Content="{Binding ShareLabel}" Command="{Binding ShareCommand}" Style="{StaticResource GymPrimaryButton44}"
+                            FontFamily="{StaticResource GymHeaderFontBold}"/>
+                    <TextBlock Text="{Binding ShareMessage}" Foreground="{StaticResource GymTextMuted}" FontSize="11" Margin="0,8,0,0" TextWrapping="Wrap"
+                               Visibility="{Binding HasShareMessage, Converter={StaticResource BoolToVis}}"/>
+                </StackPanel>
+            </Border>
+            <Border Height="14"/>
+
+            <!-- Backup History (clickable card) -->
+            <Border Style="{StaticResource GymCard}" Cursor="Hand">
+                <Border.InputBindings><MouseBinding MouseAction="LeftClick" Command="{Binding HistoryCommand}"/></Border.InputBindings>
+                <Grid>
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="&#xE81C;" FontFamily="{StaticResource GymIconFont}" FontSize="18" Foreground="{StaticResource GymAccent}" VerticalAlignment="Center"/>
+                        <TextBlock Text="Backup History" Foreground="{StaticResource GymText}" FontWeight="Bold" Margin="8,0,0,0" VerticalAlignment="Center"/>
+                    </StackPanel>
+                    <TextBlock Text="&#xE76C;" FontFamily="{StaticResource GymIconFont}" FontSize="16" Foreground="{StaticResource GymTextFaint}"
+                               HorizontalAlignment="Right" VerticalAlignment="Center"/>
+                </Grid>
+            </Border>
         </StackPanel>
     </ScrollViewer>
 </UserControl>

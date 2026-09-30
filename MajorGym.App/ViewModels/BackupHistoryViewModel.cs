@@ -7,14 +7,17 @@ using MajorGym.Data.Settings;
 
 namespace MajorGym.App.ViewModels;
 
-/// <summary>Ported from Android's Backup History screen. Per BackupHistoryPrefs.cs's own
-/// doc comment, this only ever records WHEN a backup was taken — date and time, newest
-/// first, nothing else — never a second copy of backup content.</summary>
+/// <summary>One Backup History row, exactly Android's: History icon + date on the left, time on
+/// the right.</summary>
+public sealed record BackupHistoryRow(string DateText, string TimeText);
+
+/// <summary>Ported from Android's Backup History screen. BackupHistoryPrefs only ever records
+/// WHEN a backup was taken (latest 3 months, newest first) — never backup content.</summary>
 public sealed class BackupHistoryViewModel : INotifyPropertyChanged
 {
     private readonly NavigationViewModel _nav;
 
-    public ObservableCollection<string> Entries { get; } = new();
+    public ObservableCollection<BackupHistoryRow> Entries { get; } = new();
     public bool IsEmpty => Entries.Count == 0;
 
     public ICommand BackCommand { get; }
@@ -24,7 +27,7 @@ public sealed class BackupHistoryViewModel : INotifyPropertyChanged
         _nav = nav;
         var prefs = new BackupHistoryPrefs(App.AppDataDirectory);
         foreach (var millis in prefs.Entries())
-            Entries.Add(DateUtils.FormatDateTime(millis));
+            Entries.Add(new BackupHistoryRow(DateUtils.FormatDate(millis), DateUtils.FormatTimeOfDay(millis)));
 
         BackCommand = new RelayCommand(() => _nav.NavigateTo(new Screen.Backup()));
     }

@@ -105,51 +105,59 @@ public sealed class Repository
         try
         {
             using var tx = _db.Connection.BeginTransaction();
+            SaveCore(member, tx, stampMissingUpdatedAt: true);
+            tx.Commit();
+        }
+        finally
+        {
+            _changeLogLock.Release();
+        }
+    }
 
-            var existing = GetByIdOnceNoLock(member.Id, tx);
-            var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-            var toStore = member.UpdatedAtMillis > 0 ? member : CloneWithUpdatedAt(member, now);
+    /// <summary>The body of <see cref="Save"/>, runnable inside a caller-owned transaction
+    /// (the caller holds the change-log lock). <paramref name="stampMissingUpdatedAt"/> is
+    /// false for backup restore: Android's mergeAll stores the incoming updatedAtMillis
+    /// untouched, even when it is 0.</summary>
+    private void SaveCore(Member member, SqliteTransaction tx, bool stampMissingUpdatedAt)
+    {
+        var existing = GetByIdOnceNoLock(member.Id, tx);
+        var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        var toStore = member.UpdatedAtMillis > 0 || !stampMissingUpdatedAt ? member : CloneWithUpdatedAt(member, now);
+        var logTs = toStore.UpdatedAtMillis > 0 ? toStore.UpdatedAtMillis : now;
 
-            Upsert(EncryptedForStorage(toStore), tx);
+        Upsert(EncryptedForStorage(toStore), tx);
 
-            if (existing is null)
+        if (existing is null)
+        {
+            InsertChangeLog(new SyncChangeLogEntry
+            {
+                ChangeId = Guid.NewGuid().ToString(),
+                EntityType = SyncEntityType.Member,
+                RecordId = toStore.Id,
+                Operation = SyncOperation.Add,
+                OriginDeviceId = _deviceId,
+                Seq = NextSeqNoLock(_deviceId, tx),
+                TimestampMillis = logTs,
+                FieldsJson = SyncChangeCodec.EncodeMember(toStore).ToJsonString()
+            }, tx);
+        }
+        else
+        {
+            var changedKeys = SyncChangeCodec.DiffKeys(existing, toStore);
+            if (changedKeys.Count > 0)
             {
                 InsertChangeLog(new SyncChangeLogEntry
                 {
                     ChangeId = Guid.NewGuid().ToString(),
                     EntityType = SyncEntityType.Member,
                     RecordId = toStore.Id,
-                    Operation = SyncOperation.Add,
+                    Operation = SyncOperation.Update,
                     OriginDeviceId = _deviceId,
                     Seq = NextSeqNoLock(_deviceId, tx),
-                    TimestampMillis = toStore.UpdatedAtMillis,
-                    FieldsJson = SyncChangeCodec.EncodeMember(toStore).ToJsonString()
+                    TimestampMillis = logTs,
+                    FieldsJson = SyncChangeCodec.EncodeMember(toStore, changedKeys).ToJsonString()
                 }, tx);
             }
-            else
-            {
-                var changedKeys = SyncChangeCodec.DiffKeys(existing, toStore);
-                if (changedKeys.Count > 0)
-                {
-                    InsertChangeLog(new SyncChangeLogEntry
-                    {
-                        ChangeId = Guid.NewGuid().ToString(),
-                        EntityType = SyncEntityType.Member,
-                        RecordId = toStore.Id,
-                        Operation = SyncOperation.Update,
-                        OriginDeviceId = _deviceId,
-                        Seq = NextSeqNoLock(_deviceId, tx),
-                        TimestampMillis = toStore.UpdatedAtMillis,
-                        FieldsJson = SyncChangeCodec.EncodeMember(toStore, changedKeys).ToJsonString()
-                    }, tx);
-                }
-            }
-
-            tx.Commit();
-        }
-        finally
-        {
-            _changeLogLock.Release();
         }
     }
 
@@ -353,6 +361,24 @@ public sealed class Repository
         cmd.Parameters.AddWithValue("$from", fromDayEpoch);
         cmd.Parameters.AddWithValue("$to", toDayEpochInclusive);
         return Convert.ToInt32(cmd.ExecuteScalar());
+    }
+
+    /// <summary>Android AttendanceRetentionWorker: deletes attendance older than
+    /// <see cref="AttendanceRetentionMonths"/> months (cutoff = local midnight,
+    /// dayEpoch strictly below it). No change-log entry, same as Android. Returns rows deleted.</summary>
+    public int CleanupOldAttendance()
+    {
+        var cutoffDate = DateOnly.FromDateTime(DateTime.Now).AddMonths(-(int)AttendanceRetentionMonths);
+        var cutoff = DateUtils.ToMillis(cutoffDate);
+        _changeLogLock.Wait();
+        try
+        {
+            using var cmd = _db.Connection.CreateCommand();
+            cmd.CommandText = "DELETE FROM attendance_records WHERE dayEpoch < $cutoff";
+            cmd.Parameters.AddWithValue("$cutoff", cutoff);
+            return cmd.ExecuteNonQuery();
+        }
+        finally { _changeLogLock.Release(); }
     }
 
     /// <summary>Every attendance row ever recorded, oldest first — used by the Backup
@@ -662,35 +688,52 @@ public sealed class Repository
     // ---------------- Backup import (Stage 4b) ----------------
 
     /// <summary>
-    /// Applies a fully-parsed backup (see <see cref="BackupManager.ImportJson"/>/
-    /// <see cref="BackupManager.ImportAttendance"/>/<see cref="BackupManager.ImportArchivedMembers"/>)
-    /// to the local database. Each member goes through the normal <see cref="Save"/> path,
-    /// so at-rest fingerprint re-encryption under THIS device's own DPAPI key (see
-    /// Member.FingerprintTemplate's storage-contract doc comment) and the usual change-log
-    /// diff both happen exactly as they would for any other save.
-    ///
-    /// Attendance rows are inserted with INSERT OR IGNORE against the existing
-    /// (memberId, timestampMillis) unique index, so re-importing the same backup twice is a
-    /// no-op rather than duplicate rows; each inserted row is assigned a fresh GlobalId
-    /// since the backup JSON does not carry the original one (BackupManager.ImportAttendance
-    /// doesn't parse a globalId field at all — matching what it actually exports). Archived-
-    /// member rows are inserted the same INSERT-OR-IGNORE way. Neither of these last two
-    /// write a change-log entry for the imported rows — deliberately deferred, like LAN
-    /// Sync's transport layer, rather than guessed at (Stage 4b report's "known limitations").
+    /// Applies a fully-parsed, already-validated backup in ONE transaction: either every
+    /// record is applied or (on any exception) none is — SQLite rolls the whole thing back
+    /// when the transaction is disposed uncommitted, so the database is never left
+    /// half-restored. Ports Android's Repository.mergeAll / restoreAttendance /
+    /// restoreArchivedMembersFromBackup semantics:
+    ///  - a member already stored with a NEWER updatedAtMillis than the incoming one is kept
+    ///    (incoming older copies never overwrite newer local edits);
+    ///  - Android's members DAO inserts with OnConflictStrategy.REPLACE, which also evicts a
+    ///    row that collides on the UNIQUE phone index. Windows only had ON CONFLICT(id), so a
+    ///    phone collision with a different id threw and aborted the restore mid-way; the
+    ///    same eviction is reproduced here (the caller has already written the safety
+    ///    snapshot, exactly as Android does);
+    ///  - attendance / archived rows are INSERT OR IGNORE, so restoring the same file twice
+    ///    is a no-op; local-only records are never deleted.
+    /// Returns the ids of members actually applied so the caller writes photo files only for
+    /// those, and only after this commit succeeded.
     /// </summary>
-    public (int MembersImported, int AttendanceImported, int ArchivedImported) ImportBackup(
-        IEnumerable<Member> members, IEnumerable<AttendanceRecord> attendance, IEnumerable<ArchivedMember> archivedMembers)
+    public RestoreCounts RestoreBackup(
+        IReadOnlyList<Member> members, IReadOnlyList<AttendanceRecord> attendance, IReadOnlyList<ArchivedMember> archivedMembers)
     {
-        var memberCount = 0;
-        foreach (var m in members)
+        _changeLogLock.Wait();
+        try
         {
-            Save(m);
-            memberCount++;
-        }
+            using var tx = _db.Connection.BeginTransaction();
+            var applied = new HashSet<string>();
+            var phoneReplaced = 0;
 
-        var attendanceCount = 0;
-        using (var tx = _db.Connection.BeginTransaction())
-        {
+            foreach (var m in members)
+            {
+                var existing = GetByIdOnceNoLock(m.Id, tx);
+                if (existing is not null && m.UpdatedAtMillis < existing.UpdatedAtMillis) continue;
+
+                using (var del = _db.Connection.CreateCommand())
+                {
+                    del.Transaction = tx;
+                    del.CommandText = "DELETE FROM members WHERE phone = $phone AND id <> $id";
+                    del.Parameters.AddWithValue("$phone", m.Phone);
+                    del.Parameters.AddWithValue("$id", m.Id);
+                    phoneReplaced += del.ExecuteNonQuery();
+                }
+
+                SaveCore(m, tx, stampMissingUpdatedAt: false);
+                applied.Add(m.Id);
+            }
+
+            var attendanceCount = 0;
             foreach (var rec in attendance)
             {
                 using var cmd = _db.Connection.CreateCommand();
@@ -706,12 +749,8 @@ public sealed class Repository
                 cmd.Parameters.AddWithValue("$globalId", Guid.NewGuid().ToString());
                 attendanceCount += cmd.ExecuteNonQuery();
             }
-            tx.Commit();
-        }
 
-        var archivedCount = 0;
-        using (var tx = _db.Connection.BeginTransaction())
-        {
+            var archivedCount = 0;
             foreach (var a in archivedMembers)
             {
                 using var cmd = _db.Connection.CreateCommand();
@@ -733,10 +772,14 @@ public sealed class Repository
                 cmd.Parameters.AddWithValue("$archivedAt", a.ArchivedAtMillis);
                 archivedCount += cmd.ExecuteNonQuery();
             }
-            tx.Commit();
-        }
 
-        return (memberCount, attendanceCount, archivedCount);
+            tx.Commit();
+            return new RestoreCounts(applied.Count, attendanceCount, archivedCount, phoneReplaced, applied);
+        }
+        finally
+        {
+            _changeLogLock.Release();
+        }
     }
 
     // ---------------- Internal helpers ----------------
@@ -913,3 +956,6 @@ public sealed class Repository
         return clone;
     }
 }
+
+/// <summary>What <see cref="Repository.RestoreBackup"/> actually applied.</summary>
+public sealed record RestoreCounts(int Members, int Attendance, int Archived, int PhoneReplaced, HashSet<string> AppliedMemberIds);

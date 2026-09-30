@@ -64,6 +64,12 @@ public sealed class PhotoStore
     /// whichever device originally captured the photo; re-compressing a second time on
     /// every restore/sync would be a lossy generation loss Android's own BackupManager
     /// doesn't inflict either.</summary>
+    /// <summary>The final on-disk path a member photo would have (null if the id is unsafe as a
+    /// filename). Lets a restore assign paths before the DB commit and write the bytes after.</summary>
+    public string? MemberPhotoPathFor(string memberId) => SafePhotoFile(_photosDir, memberId);
+
+    public string? IdProofPhotoPathFor(string memberId) => SafePhotoFile(_idPhotosDir, memberId);
+
     public string? WriteMemberPhoto(string memberId, byte[] jpegBytes)
     {
         var dest = SafePhotoFile(_photosDir, memberId);

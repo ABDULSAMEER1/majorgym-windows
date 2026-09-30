@@ -1,7 +1,9 @@
-using System.IO;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
+using System.Globalization;
+using System.Windows;
 using System.Windows.Input;
+using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using MajorGym.App.Navigation;
 using MajorGym.Data;
@@ -9,21 +11,22 @@ using MajorGym.Data.Entities;
 
 namespace MajorGym.App.ViewModels;
 
-public sealed class AttendanceHistoryRow
-{
-    public required string Date { get; init; }
-    public required string TimeOfDay { get; init; }
-    public required string Session { get; init; }
-}
+/// <summary>One visit row: "20 | Sep 2026", tick, time, "Morning"/"Evening" (Android AdHistoryRow).</summary>
+public sealed record AttendanceHistoryRow(string Day, string Month, string Year, string TimeText, string SessionLabel);
+
+/// <summary>A calendar-month section, newest month first (Android AdMonthHeader + its rows).</summary>
+public sealed record AttendanceMonthGroup(string Header, IReadOnlyList<AttendanceHistoryRow> Rows);
 
 /// <summary>
-/// Ported from Android's Member Attendance History screen. The percentage window runs
-/// from the member's CURRENT membership-cycle start date (the most recent HistoryEntry's
-/// DateMillis — i.e. the last time they joined/renewed — falling back to JoinedMillis for a
-/// brand-new member with no history entries yet) through today inclusive, exactly as
-/// <see cref="DateUtils.EligibleAttendanceDays"/>/<see cref="DateUtils.AttendancePercentage"/>
-/// document. This deliberately does NOT reset per calendar month or renewal-to-renewal
-/// segment beyond the current cycle — Android only ever shows the current cycle's figure.
+/// Phase 2 port of Android's AttendanceHistoryScreen ("MEMBER PROFILE"). Figures follow the
+/// Android source exactly:
+///  - attendedDays = distinct dayEpoch across ALL retained records of the member;
+///  - eligibleDays = DateUtils.EligibleAttendanceDays(member.joinedMillis) — the ORIGINAL join
+///    date: renewal on Android never changes joinedMillis, so the window does not restart;
+///  - percentage = DateUtils.AttendancePercentage(attended, eligible) (Sundays excluded there);
+///  - "N Days Left" / "Expired" from DaysBetweenNow(expiryMillis);
+///  - visits grouped by calendar month, newest first, newest visit first inside a month.
+/// Back returns to the Attendance Logs list (Android onBack = Screen.AttendanceLogs).
 /// </summary>
 public sealed class AttendanceHistoryViewModel : INotifyPropertyChanged
 {
@@ -31,12 +34,32 @@ public sealed class AttendanceHistoryViewModel : INotifyPropertyChanged
 
     public Member Member { get; }
     public BitmapImage? Photo { get; }
-    public ObservableCollection<AttendanceHistoryRow> Rows { get; } = new();
+    public bool HasPhoto => Photo is not null;
+    public string Initials { get; }
+
+    public MemberStatus Status { get; }
+    public string StatusLabel { get; }
+    public string StatusGlyph { get; }
+    public Brush StatusBrush { get; }
+    public Brush StatusTint { get; }
 
     public int AttendancePercentage { get; }
+    public double PercentValue => AttendancePercentage;
+    public string PercentText => $"{AttendancePercentage}%";
+    public string DaysLeftLabel { get; }
+
+    public string PlanText { get; }
+    public string StartDateText { get; }
+    public string ExpiryDateText { get; }
+
     public int AttendedDays { get; }
     public int EligibleDays { get; }
-    public string MembershipStartLabel { get; }
+    public string AttendedText => $"{AttendedDays} / {EligibleDays} Days";
+    public GridLength ProgressFilled { get; }
+    public GridLength ProgressRest { get; }
+
+    public ObservableCollection<AttendanceMonthGroup> Months { get; } = new();
+    public bool HasNoRecords => Months.Count == 0;
 
     public ICommand BackCommand { get; }
 
@@ -44,39 +67,69 @@ public sealed class AttendanceHistoryViewModel : INotifyPropertyChanged
     {
         _nav = nav;
         Member = member;
+        Photo = BitmapImageUtils.LoadFromFile(member.PhotoPath, 256);
+        Initials = string.Concat(member.Name.Split(' ', StringSplitOptions.RemoveEmptyEntries)
+            .Select(p => p[0]).Take(2)).ToUpperInvariant();
 
-        if (member.PhotoPath is { Length: > 0 } photoPath && File.Exists(photoPath))
+        Status = MemberStatusExtensions.StatusOf(member.ExpiryMillis);
+        Brush statusBrush;
+        switch (Status)
         {
-            var img = new BitmapImage();
-            img.BeginInit();
-            img.CacheOption = BitmapCacheOption.OnLoad;
-            img.UriSource = new Uri(photoPath);
-            img.EndInit();
-            img.Freeze();
-            Photo = img;
+            case MemberStatus.ACTIVE:
+                StatusLabel = "ACTIVE"; StatusGlyph = "\uE73E"; statusBrush = Res("GymSuccess"); break;
+            case MemberStatus.EXPIRING:
+                StatusLabel = "EXPIRING SOON"; StatusGlyph = "\uE823"; statusBrush = new SolidColorBrush(Color.FromRgb(0xFF, 0xB0, 0x20)); break;
+            default:
+                StatusLabel = "EXPIRED"; StatusGlyph = "\uE711"; statusBrush = Res("GymDanger"); break;
         }
+        StatusBrush = statusBrush;
+        StatusBrush.Freeze();
+        var c = ((SolidColorBrush)StatusBrush).Color;
+        StatusTint = new SolidColorBrush(Color.FromArgb(0x33, c.R, c.G, c.B));
+        StatusTint.Freeze();
 
-        var history = History.ToHistoryList(member.HistoryJson);
-        var startMillis = history.Count > 0 ? history[^1].DateMillis : member.JoinedMillis;
-        MembershipStartLabel = DateUtils.FormatDate(startMillis);
-
-        var startEpoch = DateUtils.ToMillis(DateUtils.ToLocalDate(startMillis));
-        var todayEpoch = DateUtils.ToMillis(DateOnly.FromDateTime(DateTime.Now));
-        EligibleDays = DateUtils.EligibleAttendanceDays(startMillis);
-        AttendedDays = repository.GetDistinctAttendedDayCount(member.Id, startEpoch, todayEpoch);
+        var records = repository.GetAttendanceForMember(member.Id); // newest first
+        AttendedDays = records.Select(r => r.DayEpoch).Distinct().Count();
+        EligibleDays = DateUtils.EligibleAttendanceDays(member.JoinedMillis);
         AttendancePercentage = DateUtils.AttendancePercentage(AttendedDays, EligibleDays);
 
-        foreach (var rec in repository.GetAttendanceForMember(member.Id))
+        var days = DateUtils.DaysBetweenNow(member.ExpiryMillis);
+        DaysLeftLabel = days < 0 ? "Expired" : $"{days} Days Left";
+
+        PlanText = member.Plan;
+        StartDateText = DateUtils.FormatDate(member.JoinedMillis);
+        ExpiryDateText = DateUtils.FormatDate(member.ExpiryMillis);
+
+        var fraction = EligibleDays > 0 ? Math.Clamp(AttendedDays / (double)EligibleDays, 0.0, 1.0) : 0.0;
+        ProgressFilled = new GridLength(fraction, GridUnitType.Star);
+        ProgressRest = new GridLength(1.0 - fraction, GridUnitType.Star);
+
+        foreach (var group in records.GroupBy(r =>
         {
-            Rows.Add(new AttendanceHistoryRow
+            var d = DateUtils.ToLocalDate(r.TimestampMillis);
+            return (d.Year, d.Month);
+        }))
+        {
+            var header = new DateTime(group.Key.Year, group.Key.Month, 1)
+                .ToString("MMMM yyyy", CultureInfo.GetCultureInfo("en-US"));
+            var rows = group.Select(r =>
             {
-                Date = DateUtils.FormatDate(rec.TimestampMillis),
-                TimeOfDay = DateUtils.FormatTimeOfDay(rec.TimestampMillis),
-                Session = rec.Session
-            });
+                var parts = DateUtils.FormatDate(r.TimestampMillis).Split(' ');
+                return new AttendanceHistoryRow(
+                    parts.ElementAtOrDefault(0) ?? "", parts.ElementAtOrDefault(1) ?? "", parts.ElementAtOrDefault(2) ?? "",
+                    DateUtils.FormatTimeOfDay(r.TimestampMillis),
+                    r.Session == AttendanceSession.MORNING.ToString() ? "Morning" : "Evening");
+            }).ToList();
+            Months.Add(new AttendanceMonthGroup(header, rows));
         }
 
-        BackCommand = new RelayCommand(() => _nav.NavigateTo(new Screen.Profile(member.Id)));
+        BackCommand = new RelayCommand(() => _nav.NavigateTo(new Screen.AttendanceLogs()));
+    }
+
+    private static Brush Res(string key)
+    {
+        var b = (SolidColorBrush)Application.Current.FindResource(key);
+        return new SolidColorBrush(b.Color);
     }
 
     public event PropertyChangedEventHandler? PropertyChanged;

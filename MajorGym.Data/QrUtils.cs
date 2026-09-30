@@ -87,16 +87,18 @@ public static class QrUtils
     /// never rotated, unlike the per-member QR above. Encodes only the gym ID/attendance
     /// code, no personal data.</summary>
     public static Bitmap GymQrBitmap(string gymId, int sizePx = 512) =>
-        RenderQrBitmap(gymId, sizePx);
+        RenderQrBitmap(gymId, sizePx, defaultQuietZone: true);
 
-    private static Bitmap RenderQrBitmap(string content, int sizePx)
+    /// <param name="defaultQuietZone">true = ZXing's default 4-module quiet zone, which is
+    /// what Android's <c>QRCodeWriter().encode(text, QR_CODE, 512, 512)</c> produces for the
+    /// attendance QR (Phase 2 parity). false = the Phase 1 zero-margin render, still used by
+    /// the member onboarding QR so Membership screens are unchanged.</param>
+    private static Bitmap RenderQrBitmap(string content, int sizePx, bool defaultQuietZone = false)
     {
         var writer = new QRCodeWriter();
-        BitMatrix matrix = writer.encode(content, BarcodeFormat.QR_CODE, sizePx, sizePx,
-            new Dictionary<EncodeHintType, object>
-            {
-                [EncodeHintType.MARGIN] = 0
-            });
+        var hints = new Dictionary<EncodeHintType, object>();
+        if (!defaultQuietZone) hints[EncodeHintType.MARGIN] = 0;
+        BitMatrix matrix = writer.encode(content, BarcodeFormat.QR_CODE, sizePx, sizePx, hints);
 
         var bitmap = new Bitmap(sizePx, sizePx, PixelFormat.Format32bppRgb);
         for (var x = 0; x < sizePx; x++)

@@ -339,4 +339,44 @@
 
     <!-- Themed ScrollViewer thumb is left at the Windows default; the dark theme is carried by
          the surfaces above. -->
+
+    <!-- ===== Phase 2 (Attendance / Backup parity) additions ===== -->
+    <FontFamily x:Key="GymIconFont">Segoe MDL2 Assets</FontFamily>
+    <FontFamily x:Key="GymHeaderFontBold">/Assets/Fonts/#Exo 2, Segoe UI</FontFamily>
+    <FontFamily x:Key="GymHeaderFontSemiBold">/Assets/Fonts/#Exo 2 SemiBold, Segoe UI</FontFamily>
+
+    <!-- Android Material Switch equivalent. -->
+    <Style x:Key="GymSwitch" TargetType="CheckBox">
+        <Setter Property="Cursor" Value="Hand"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="CheckBox">
+                    <Border x:Name="Track" Width="44" Height="24" CornerRadius="12"
+                            Background="{StaticResource GymSurface3}" BorderBrush="{StaticResource GymBorder}" BorderThickness="1">
+                        <Ellipse x:Name="Thumb" Width="16" Height="16" Fill="{StaticResource GymTextMuted}"
+                                 HorizontalAlignment="Left" Margin="3,0,0,0"/>
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsChecked" Value="True">
+                            <Setter TargetName="Track" Property="Background" Value="{StaticResource GymAccentTint}"/>
+                            <Setter TargetName="Track" Property="BorderBrush" Value="{StaticResource GymAccent}"/>
+                            <Setter TargetName="Thumb" Property="Fill" Value="{StaticResource GymAccent}"/>
+                            <Setter TargetName="Thumb" Property="HorizontalAlignment" Value="Right"/>
+                            <Setter TargetName="Thumb" Property="Margin" Value="0,0,3,0"/>
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- Android GymPrimaryButton row used on the Backup screen: 44 high, gradient, dark bold label. -->
+    <Style x:Key="GymPrimaryButton44" TargetType="Button" BasedOn="{StaticResource GymPrimaryButtonLarge}">
+        <Setter Property="Height" Value="44"/>
+        <Setter Property="FontSize" Value="14"/>
+    </Style>
+    <Style x:Key="GymSecondaryButton44" TargetType="Button" BasedOn="{StaticResource GymSecondaryButton}">
+        <Setter Property="Height" Value="44"/>
+        <Setter Property="FontSize" Value="14"/>
+    </Style>
 </ResourceDictionary>
