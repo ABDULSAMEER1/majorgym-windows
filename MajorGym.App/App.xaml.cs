@@ -68,6 +68,11 @@ public partial class App : System.Windows.Application
         try { Repository.ArchiveExpiredMembersOnce(PhotoStore); }
         catch (Exception ex) { System.Diagnostics.Trace.TraceError($"[App] Expired-member archive sweep failed: {ex.Message}"); }
 
+        // Attendance retention (Android AttendanceRetentionWorker: daily, deletes attendance older than
+        // 4 months). No scheduler exists on Windows, so it runs once per app start like the sweep above.
+        try { Repository.CleanupOldAttendance(); }
+        catch (Exception ex) { System.Diagnostics.Trace.TraceError($"[App] Attendance retention cleanup failed: {ex.Message}"); }
+
         if (File.Exists(StartupVideoPath))
         {
             var splash = new Views.SplashWindow(StartupVideoPath);

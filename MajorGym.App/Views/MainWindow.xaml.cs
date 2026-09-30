@@ -15,7 +15,7 @@ public partial class MainWindow : Window
         App.Nav.NavigateTo(new Screen.Dashboard());
 
     private void NavAttendance_Click(object sender, RoutedEventArgs e) =>
-        App.Nav.NavigateTo(new Screen.Attendance());
+        App.Nav.NavigateTo(new Screen.AttendanceLogs());
 
     private void NavAdd_Click(object sender, RoutedEventArgs e) =>
         App.Nav.NavigateTo(new Screen.Add());

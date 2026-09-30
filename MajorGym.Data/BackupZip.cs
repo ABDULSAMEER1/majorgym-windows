@@ -86,9 +86,43 @@ public static class BackupZip
         catch (Exception e)
         {
             TryDelete(tempFile);
-            throw new BackupFormatException("This backup file is corrupted and couldn't be opened.", e);
+            throw new BackupFormatException(CorruptMessage(zipFilePath), e);
         }
         return tempFile;
+    }
+
+    private const string CorruptBase = "This backup file is corrupted and couldn't be opened.";
+
+    /// <summary>Same message Android shows, plus a specific hint when the ZIP starts correctly
+    /// but has no end-of-central-directory record — the signature of a file that was cut
+    /// short while being copied or sent (the only way an Android export, which is verified
+    /// before it is handed out, ends up unreadable).</summary>
+    private static string CorruptMessage(string zipFilePath)
+    {
+        try
+        {
+            if (LooksLikeZip(zipFilePath) && !HasEndOfCentralDirectory(zipFilePath))
+                return CorruptBase + " The file looks incomplete or damaged — most likely it was cut off while being copied or sent " +
+                       $"({new FileInfo(zipFilePath).Length:N0} bytes received). Copy the original backup from the phone again " +
+                       "(or export a fresh one) and compare the file sizes.";
+        }
+        catch { /* fall through to the plain message */ }
+        return CorruptBase;
+    }
+
+    /// <summary>True if the last 64 KB + 22 bytes contain the ZIP end-of-central-directory
+    /// signature (PK\5\6), where a complete archive always ends.</summary>
+    public static bool HasEndOfCentralDirectory(string filePath)
+    {
+        using var fs = File.OpenRead(filePath);
+        var len = (int)Math.Min(fs.Length, 65557);
+        fs.Seek(-len, SeekOrigin.End);
+        var buf = new byte[len];
+        var read = 0;
+        while (read < len) { var n = fs.Read(buf, read, len - read); if (n <= 0) break; read += n; }
+        for (var i = read - 22; i >= 0; i--)
+            if (buf[i] == 0x50 && buf[i + 1] == 0x4B && buf[i + 2] == 0x05 && buf[i + 3] == 0x06) return true;
+        return false;
     }
 
     /// <summary>Opens <paramref name="zipFilePath"/> purely to confirm it's a valid,

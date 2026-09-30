@@ -1,4 +1,7 @@
 using System.Diagnostics;
+using System.Globalization;
+using System.Text.Encodings.Web;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using MajorGym.Data.Entities;
 
@@ -126,178 +129,203 @@ public static class BackupManager
             ["attendance"] = attendanceArr,
             ["archivedMembers"] = archivedArr
         };
-        return root.ToJsonString();
+        return root.ToJsonString(ExportOptions);
     }
 
-    /// <summary>Reads the optional "archivedMembers" array (v5+). Missing key (any older
-    /// backup) or a malformed individual row just yields no/fewer archived members — never
-    /// a failure, and never affects member or attendance restore, which are parsed
-    /// separately. (Android doc comment, preserved.)</summary>
-    public static List<ArchivedMember> ImportArchivedMembers(string json)
+    /// <summary>Compact output that does NOT \u-escape '+' and other harmless characters
+    /// in Base64 photo data (the default encoder inflates a photo-heavy backup by several
+    /// percent). Both forms are valid JSON that Android's org.json reads identically.</summary>
+    private static readonly JsonSerializerOptions ExportOptions = new()
     {
-        var root = JsonNode.Parse(json) as JsonObject ?? new JsonObject();
-        var arr = root["archivedMembers"] as JsonArray ?? new JsonArray();
-        var result = new List<ArchivedMember>();
-        foreach (var node in arr)
-        {
-            if (node is not JsonObject o) continue;
-            var id = (string?)o["originalMemberId"] ?? "";
-            if (string.IsNullOrWhiteSpace(id)) continue;
-            try
-            {
-                result.Add(new ArchivedMember
-                {
-                    OriginalMemberId = id,
-                    Name = (string?)o["name"] ?? "",
-                    Phone = (string?)o["phone"] ?? "",
-                    JoinedMillis = (long?)o["joinedMillis"] ?? 0L,
-                    LastPlan = (string?)o["lastPlan"] ?? "",
-                    LastFee = (double?)o["lastFee"] ?? 0.0,
-                    LastStartMillis = (long?)o["lastStartMillis"] ?? 0L,
-                    LastExpiryMillis = (long?)o["lastExpiryMillis"] ?? 0L,
-                    IdProof = (string?)o["idProof"] ?? "",
-                    ArchivedAtMillis = (long?)o["archivedAtMillis"] ?? DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
-                });
-            }
-            catch
-            {
-                // Skip malformed record — Android parity ("Skipping malformed archived
-                // member record ...").
-            }
-        }
-        return result;
+        Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+        WriteIndented = false
+    };
+
+    /// <summary>One member decoded from a backup. Photo bytes are held in memory — nothing
+    /// touches disk until the database restore has committed (see
+    /// <see cref="BackupService.ImportAndRestore"/>). <see cref="Member.PhotoPath"/> /
+    /// <see cref="Member.IdProofPhotoPath"/> already hold the final per-member-id paths.</summary>
+    public sealed class ParsedMember
+    {
+        public required Member Member { get; init; }
+        public byte[]? PhotoBytes { get; init; }
+        public byte[]? IdProofPhotoBytes { get; init; }
     }
 
-    /// <summary>Reads the optional "attendance" array (v4+). Missing key (any older
-    /// backup) or a malformed individual row just yields no/fewer attendance records —
-    /// never a failure, and never affects member restore, which is parsed and applied
-    /// separately by <see cref="ImportJson"/>. (Android doc comment, preserved.)</summary>
-    public static List<AttendanceRecord> ImportAttendance(string json)
+    public sealed class ParsedBackup
     {
-        var root = JsonNode.Parse(json) as JsonObject ?? new JsonObject();
-        var arr = root["attendance"] as JsonArray ?? new JsonArray();
-        var result = new List<AttendanceRecord>();
-        foreach (var node in arr)
-        {
-            if (node is not JsonObject o) continue;
-            var memberId = (string?)o["memberId"] ?? "";
-            if (string.IsNullOrWhiteSpace(memberId)) continue;
-            if (o["timestampMillis"] is null) continue;
-            var timestampMillis = (long)o["timestampMillis"]!;
-            var sessionText = (string?)o["session"];
-            var session = !string.IsNullOrWhiteSpace(sessionText)
-                ? sessionText
-                : AttendanceSessionExtensions.SessionOf(timestampMillis).ToString();
-            var dayEpoch = o["dayEpoch"] is not null
-                ? (long)o["dayEpoch"]!
-                : DateUtils.ToMillis(DateUtils.ToLocalDate(timestampMillis));
-
-            result.Add(new AttendanceRecord
-            {
-                MemberId = memberId,
-                TimestampMillis = timestampMillis,
-                DayEpoch = dayEpoch,
-                Session = session!
-            });
-        }
-        return result;
+        public List<ParsedMember> Members { get; } = new();
+        public List<AttendanceRecord> Attendance { get; } = new();
+        public List<ArchivedMember> Archived { get; } = new();
+        public int? SchemaVersion { get; set; }
+        /// <summary>Length of the raw "members" array, before any record was skipped.</summary>
+        public int RawMemberCount { get; set; }
+        /// <summary>Records/photos that were malformed and skipped (Android skips them too).</summary>
+        public int SkippedRecords { get; set; }
+        public int SkippedPhotos { get; set; }
     }
 
-    /// <summary>
-    /// Reads "fingerprintTemplateBase64" (current format) as a plain template. A
-    /// "fingerprintTemplateProtected" field (pre-v3 backups, portable-encrypted with a
-    /// Sync Code) can no longer be decrypted — that key derivation no longer exists
-    /// anywhere in this app — so it's skipped with a warning: the member still imports
-    /// normally, just without a fingerprint, rather than the whole restore failing or a
-    /// new key/prompt being invented to recover it. (Android doc comment, preserved —
-    /// same behavior, same reasoning, on Windows.)
-    /// </summary>
-    public static List<Member> ImportJson(string json, PhotoStore photoStore)
+    private const int MaxPhotoBytes = 64 * 1024 * 1024;
+
+    /// <summary>Parses and validates the whole document without side effects: no file is
+    /// written and no database row touched. Every field is read with Android's org.json
+    /// coercion rules (a number where a string is expected, a decimal where an integer is
+    /// expected, etc. never throws); a malformed record is skipped, never fatal.</summary>
+    public static ParsedBackup ParseBackup(string json, PhotoStore photoStore)
     {
-        var root = JsonNode.Parse(json) as JsonObject ?? new JsonObject();
+        var root = JsonNode.Parse(json) as JsonObject ?? throw new BackupFormatException("This file isn't a valid backup.");
+        var result = new ParsedBackup { SchemaVersion = (int?)Js.Lng(root, "schemaVersion") };
+
         var arr = root["members"] as JsonArray ?? new JsonArray();
-        var result = new List<Member>();
-
+        result.RawMemberCount = arr.Count;
         for (var i = 0; i < arr.Count; i++)
         {
-            if (arr[i] is not JsonObject o)
-            {
-                Trace.TraceWarning($"[BackupManager] Skipping backup record {i} - not a JSON object");
-                continue;
-            }
-            var id = (string?)o["id"];
-            if (string.IsNullOrEmpty(id))
-            {
-                Trace.TraceWarning($"[BackupManager] Skipping backup record {i} - missing/invalid id");
-                continue;
-            }
+            if (arr[i] is not JsonObject o) { result.SkippedRecords++; Trace.TraceWarning($"[BackupManager] Skipping backup record {i} - not a JSON object"); continue; }
+            var id = Js.Str(o, "id");
+            if (string.IsNullOrWhiteSpace(id)) { result.SkippedRecords++; Trace.TraceWarning($"[BackupManager] Skipping backup record {i} - missing/invalid id"); continue; }
+            var name = Js.Str(o, "name");
+            if (name is null) { result.SkippedRecords++; Trace.TraceWarning($"[BackupManager] Skipping backup record {id} - missing name"); continue; }
 
-            string? photoPath = null;
-            var b64 = (string?)o["photoBase64"] ?? "";
-            if (!string.IsNullOrWhiteSpace(b64))
-            {
-                try { photoPath = photoStore.WriteMemberPhoto(id, Convert.FromBase64String(b64)); }
-                catch (Exception e) { Trace.TraceWarning($"[BackupManager] Skipping photo for record {id}: {e.Message}"); }
-            }
+            byte[]? photoBytes = DecodeBase64(Js.Str(o, "photoBase64"), id, "photo", result);
+            var photoPath = photoBytes is null ? null : photoStore.MemberPhotoPathFor(id);
+            if (photoPath is null) photoBytes = null;
 
-            // Old backups never had this field — "" reads the same as "no ID proof
-            // provided", never a crash (Android doc comment, preserved).
-            var idProofPhotoPath = "";
-            var idB64 = (string?)o["idProofPhotoBase64"] ?? "";
-            if (!string.IsNullOrWhiteSpace(idB64))
-            {
-                try { idProofPhotoPath = photoStore.WriteIdProofPhoto(id, Convert.FromBase64String(idB64)) ?? ""; }
-                catch (Exception e) { Trace.TraceWarning($"[BackupManager] Skipping ID proof photo for record {id}: {e.Message}"); }
-            }
+            byte[]? idBytes = DecodeBase64(Js.Str(o, "idProofPhotoBase64"), id, "ID proof photo", result);
+            var idPath = idBytes is null ? null : photoStore.IdProofPhotoPathFor(id);
+            if (idPath is null) idBytes = null;
 
-            byte[]? fingerprintTemplate = null;
-            var protectedB64 = (string?)o["fingerprintTemplateProtected"] ?? "";
-            if (!string.IsNullOrWhiteSpace(protectedB64))
+            byte[]? fingerprint = null;
+            if (!string.IsNullOrWhiteSpace(Js.Str(o, "fingerprintTemplateProtected")))
             {
                 Trace.TraceWarning($"[BackupManager] Backup contains a pre-v3 protected fingerprint template for {id} - it can no longer be decrypted and will be skipped");
             }
             else
             {
-                var fpB64 = (string?)o["fingerprintTemplateBase64"] ?? "";
-                if (!string.IsNullOrWhiteSpace(fpB64))
-                {
-                    try { fingerprintTemplate = Convert.FromBase64String(fpB64); } catch { /* leave null */ }
-                }
+                fingerprint = DecodeBase64(Js.Str(o, "fingerprintTemplateBase64"), id, "fingerprint template", result);
             }
 
-            try
+            var joined = Js.Lng(o, "joinedMillis") ?? 0L;
+            result.Members.Add(new ParsedMember
             {
-                var joinedMillis = (long?)o["joinedMillis"] ?? 0L;
-                result.Add(new Member
+                PhotoBytes = photoBytes,
+                IdProofPhotoBytes = idBytes,
+                Member = new Member
                 {
                     Id = id,
-                    Name = (string)o["name"]!, // required — a missing "name" throws and is caught below, Android parity
-                    Phone = (string?)o["phone"] ?? "",
+                    Name = name,
+                    Phone = Js.Str(o, "phone") ?? "",
                     PhotoPath = photoPath,
-                    Plan = (string?)o["plan"] ?? "",
-                    Fee = (double?)o["fee"] ?? 0.0,
-                    JoinedMillis = joinedMillis,
-                    ExpiryMillis = (long?)o["expiryMillis"] ?? 0L,
-                    UpdatedAtMillis = (long?)o["updatedAtMillis"] ?? 0L,
+                    Plan = Js.Str(o, "plan") ?? "",
+                    Fee = Js.Dbl(o, "fee") ?? 0.0,
+                    JoinedMillis = joined,
+                    ExpiryMillis = Js.Lng(o, "expiryMillis") ?? 0L,
+                    UpdatedAtMillis = Js.Lng(o, "updatedAtMillis") ?? 0L,
                     HistoryJson = SafeHistoryArray(o),
-                    IdProof = (string?)o["idProof"] ?? "",
-                    IdProofPhotoPath = idProofPhotoPath,
-                    PasswordHash = (string?)o["passwordHash"] ?? "",
-                    CreatedAtMillis = (long?)o["createdAtMillis"] ?? joinedMillis,
-                    LastAttendanceMillis = o["lastAttendanceMillis"] is not null ? (long?)o["lastAttendanceMillis"] : null,
-                    Archived = (bool?)o["archived"] ?? false,
-                    QrToken = (string?)o["qrToken"] ?? "",
-                    QrTokenExpiryMillis = (long?)o["qrTokenExpiryMillis"] ?? 0L,
-                    FingerprintTemplate = fingerprintTemplate,
-                    PendingDeletionMillis = o["pendingDeletionMillis"] is not null ? (long?)o["pendingDeletionMillis"] : null
-                });
-            }
-            catch (Exception e)
+                    IdProof = Js.Str(o, "idProof") ?? "",
+                    IdProofPhotoPath = idPath ?? "",
+                    PasswordHash = Js.Str(o, "passwordHash") ?? "",
+                    CreatedAtMillis = Js.Lng(o, "createdAtMillis") ?? joined,
+                    LastAttendanceMillis = Js.Lng(o, "lastAttendanceMillis"),
+                    Archived = Js.Bool(o, "archived") ?? false,
+                    QrToken = Js.Str(o, "qrToken") ?? "",
+                    QrTokenExpiryMillis = Js.Lng(o, "qrTokenExpiryMillis") ?? 0L,
+                    FingerprintTemplate = fingerprint,
+                    PendingDeletionMillis = Js.Lng(o, "pendingDeletionMillis")
+                }
+            });
+        }
+
+        result.Attendance.AddRange(ReadAttendance(root));
+        result.Archived.AddRange(ReadArchived(root));
+        return result;
+    }
+
+    private static byte[]? DecodeBase64(string? text, string id, string what, ParsedBackup result)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return null;
+        try
+        {
+            var bytes = Convert.FromBase64String(text);
+            if (bytes.Length == 0 || bytes.Length > MaxPhotoBytes) throw new FormatException("empty or oversized");
+            return bytes;
+        }
+        catch (Exception e)
+        {
+            result.SkippedPhotos++;
+            Trace.TraceWarning($"[BackupManager] Skipping {what} for record {id}: {e.Message}");
+            return null;
+        }
+    }
+
+    /// <summary>Reads the optional "archivedMembers" array (v5+). Missing key or a malformed
+    /// row just yields no/fewer archived members — never a failure. (Android doc, preserved.)</summary>
+    public static List<ArchivedMember> ImportArchivedMembers(string json) =>
+        ReadArchived(JsonNode.Parse(json) as JsonObject ?? new JsonObject());
+
+    /// <summary>Reads the optional "attendance" array (v4+). Missing key or a malformed row
+    /// just yields no/fewer records — never a failure. (Android doc, preserved.)</summary>
+    public static List<AttendanceRecord> ImportAttendance(string json) =>
+        ReadAttendance(JsonNode.Parse(json) as JsonObject ?? new JsonObject());
+
+    private static List<ArchivedMember> ReadArchived(JsonObject root)
+    {
+        var result = new List<ArchivedMember>();
+        foreach (var node in root["archivedMembers"] as JsonArray ?? new JsonArray())
+        {
+            if (node is not JsonObject o) continue;
+            var id = Js.Str(o, "originalMemberId") ?? "";
+            if (string.IsNullOrWhiteSpace(id)) continue;
+            result.Add(new ArchivedMember
             {
-                Trace.TraceWarning($"[BackupManager] Skipping malformed backup record {id}: {e.Message}");
-            }
+                OriginalMemberId = id,
+                Name = Js.Str(o, "name") ?? "",
+                Phone = Js.Str(o, "phone") ?? "",
+                JoinedMillis = Js.Lng(o, "joinedMillis") ?? 0L,
+                LastPlan = Js.Str(o, "lastPlan") ?? "",
+                LastFee = Js.Dbl(o, "lastFee") ?? 0.0,
+                LastStartMillis = Js.Lng(o, "lastStartMillis") ?? 0L,
+                LastExpiryMillis = Js.Lng(o, "lastExpiryMillis") ?? 0L,
+                IdProof = Js.Str(o, "idProof") ?? "",
+                ArchivedAtMillis = Js.Lng(o, "archivedAtMillis") ?? DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
+            });
         }
         return result;
+    }
+
+    private static List<AttendanceRecord> ReadAttendance(JsonObject root)
+    {
+        var result = new List<AttendanceRecord>();
+        foreach (var node in root["attendance"] as JsonArray ?? new JsonArray())
+        {
+            if (node is not JsonObject o) continue;
+            var memberId = Js.Str(o, "memberId") ?? "";
+            if (string.IsNullOrWhiteSpace(memberId)) continue;
+            var ts = Js.Lng(o, "timestampMillis");
+            if (ts is null) continue;
+            var sessionText = Js.Str(o, "session");
+            result.Add(new AttendanceRecord
+            {
+                MemberId = memberId,
+                TimestampMillis = ts.Value,
+                DayEpoch = Js.Lng(o, "dayEpoch") ?? DateUtils.ToMillis(DateUtils.ToLocalDate(ts.Value)),
+                Session = !string.IsNullOrWhiteSpace(sessionText) ? sessionText : AttendanceSessionExtensions.SessionOf(ts.Value).ToString()
+            });
+        }
+        return result;
+    }
+
+    /// <summary>Convenience wrapper kept for API parity with Android's importJson: returns
+    /// just the members. Unlike <see cref="ParseBackup"/> this WRITES photo files
+    /// immediately, so the restore path never uses it.</summary>
+    public static List<Member> ImportJson(string json, PhotoStore photoStore)
+    {
+        var parsed = ParseBackup(json, photoStore);
+        foreach (var pm in parsed.Members)
+        {
+            if (pm.PhotoBytes is not null) photoStore.WriteMemberPhoto(pm.Member.Id, pm.PhotoBytes);
+            if (pm.IdProofPhotoBytes is not null) photoStore.WriteIdProofPhoto(pm.Member.Id, pm.IdProofPhotoBytes);
+        }
+        return parsed.Members.Select(pm => pm.Member).ToList();
     }
 
     /// <summary>Never lets one corrupted history array fail the whole member record —
@@ -324,5 +352,49 @@ public static class BackupManager
         {
             return new JsonArray();
         }
+    }
+}
+
+/// <summary>Lenient JSON readers with the same coercion as Android's org.json
+/// optString/optLong/optDouble/optBoolean: a JSON null or absent key is "missing"; a
+/// number read as string yields its text; a decimal or numeric string read as a long is
+/// truncated. A real backup can therefore never be rejected over a representation
+/// difference.</summary>
+internal static class Js
+{
+    public static string? Str(JsonObject o, string key)
+    {
+        if (!o.TryGetPropertyValue(key, out var n) || n is null) return null;
+        if (n is JsonValue v && v.TryGetValue<string>(out var s)) return s;
+        return n.ToJsonString();
+    }
+
+    public static long? Lng(JsonObject o, string key)
+    {
+        if (!o.TryGetPropertyValue(key, out var n) || n is not JsonValue v) return null;
+        if (v.TryGetValue<long>(out var l)) return l;
+        if (v.TryGetValue<double>(out var d)) return double.IsNaN(d) ? 0L : (long)d;
+        if (v.TryGetValue<string>(out var s) && double.TryParse(s, NumberStyles.Float, CultureInfo.InvariantCulture, out var d2)) return (long)d2;
+        return null;
+    }
+
+    public static double? Dbl(JsonObject o, string key)
+    {
+        if (!o.TryGetPropertyValue(key, out var n) || n is not JsonValue v) return null;
+        if (v.TryGetValue<double>(out var d)) return d;
+        if (v.TryGetValue<string>(out var s) && double.TryParse(s, NumberStyles.Float, CultureInfo.InvariantCulture, out var d2)) return d2;
+        return null;
+    }
+
+    public static bool? Bool(JsonObject o, string key)
+    {
+        if (!o.TryGetPropertyValue(key, out var n) || n is not JsonValue v) return null;
+        if (v.TryGetValue<bool>(out var b)) return b;
+        if (v.TryGetValue<string>(out var s))
+        {
+            if (s.Equals("true", StringComparison.OrdinalIgnoreCase)) return true;
+            if (s.Equals("false", StringComparison.OrdinalIgnoreCase)) return false;
+        }
+        return null;
     }
 }

@@ -1,23 +1,70 @@
 <UserControl x:Class="MajorGym.App.Views.AttendanceView"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
-    <ScrollViewer Background="{StaticResource GymBg}">
-        <StackPanel Margin="20" >
-            <Button Content="&#8592; Back" Command="{Binding BackCommand}" HorizontalAlignment="Left"
-                    Background="Transparent" BorderThickness="0" Foreground="{StaticResource GymTextMuted}" Margin="0,0,0,12"/>
-            <TextBlock Text="Attendance" Style="{StaticResource GymHeading}" Margin="0,0,0,4"/>
-            <TextBlock Text="{Binding GymName}" Style="{StaticResource GymBody}" Margin="0,0,0,16"/>
+    <Grid Background="{StaticResource GymBg}">
+        <ScrollViewer VerticalScrollBarVisibility="Auto">
+            <StackPanel Margin="16,20,16,24">
+                <!-- Header: back arrow + "ATTENDANCE" (20sp header) -->
+                <StackPanel Orientation="Horizontal" Margin="0,0,0,16">
+                    <Button Command="{Binding BackCommand}" Style="{StaticResource GymTextButton}" Padding="6,4" VerticalAlignment="Center">
+                        <TextBlock Text="&#xE72B;" FontFamily="{StaticResource GymIconFont}" FontSize="18" Foreground="{StaticResource GymText}"/>
+                    </Button>
+                    <TextBlock Text="ATTENDANCE" Style="{StaticResource GymHeaderText}" FontSize="20" Margin="12,0,0,0"/>
+                </StackPanel>
 
-            <Border Style="{StaticResource GymCard}" HorizontalAlignment="Center">
-                <StackPanel HorizontalAlignment="Center">
-                    <Image Source="{Binding QrImage}" Width="220" Height="220"/>
-                    <TextBlock Text="Members scan this code to check in" Style="{StaticResource GymBody}"
-                               Margin="0,12,0,0" HorizontalAlignment="Center" TextWrapping="Wrap"/>
+                <!-- GymAttendanceQrCard: glass card, cyan glow border, radius 16, padding 16 -->
+                <Border Style="{StaticResource GymGlassCard}" BorderBrush="{StaticResource GymBorderGlowCyan}" Padding="16">
+                    <StackPanel>
+                        <TextBlock Text="GYM ATTENDANCE QR" Style="{StaticResource GymSectionLabel}" Foreground="{StaticResource GymAccent}"/>
+                        <TextBlock Text="Members scan this to check in &#8212; fixed, never changes" Foreground="{StaticResource GymTextFaint}"
+                                   FontSize="11" Margin="0,2,0,12" TextWrapping="Wrap"/>
+
+                        <!-- QR: 176 gradient frame (radius 16) → 5 padding → white (radius 12) → 10 padding → code -->
+                        <Border Width="176" Height="176" CornerRadius="16" Background="{StaticResource GymAccentGradient}"
+                                HorizontalAlignment="Center" Cursor="Hand">
+                            <Border.Effect><DropShadowEffect Color="#FF00F0FF" BlurRadius="18" ShadowDepth="0" Opacity="0.35"/></Border.Effect>
+                            <Border.InputBindings><MouseBinding MouseAction="LeftClick" Command="{Binding DisplayCommand}"/></Border.InputBindings>
+                            <Border Margin="5" CornerRadius="12" Background="White" Padding="10">
+                                <Image Source="{Binding QrImage}" Stretch="Uniform" RenderOptions.BitmapScalingMode="NearestNeighbor"/>
+                            </Border>
+                        </Border>
+
+                        <Border Height="14"/>
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/><ColumnDefinition Width="10"/><ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <Button Grid.Column="0" Command="{Binding DisplayCommand}" Style="{StaticResource GymActionButton}">
+                                <StackPanel>
+                                    <TextBlock Text="&#xE740;" FontFamily="{StaticResource GymIconFont}" FontSize="20" HorizontalAlignment="Center"/>
+                                    <TextBlock Text="Display" FontSize="12" FontWeight="SemiBold" HorizontalAlignment="Center" Margin="0,4,0,0"/>
+                                </StackPanel>
+                            </Button>
+                            <Button Grid.Column="2" Command="{Binding ShareCommand}" Style="{StaticResource GymActionButton}">
+                                <StackPanel>
+                                    <TextBlock Text="&#xE72D;" FontFamily="{StaticResource GymIconFont}" FontSize="20" HorizontalAlignment="Center"/>
+                                    <TextBlock Text="Share" FontSize="12" FontWeight="SemiBold" HorizontalAlignment="Center" Margin="0,4,0,0"/>
+                                </StackPanel>
+                            </Button>
+                        </Grid>
+                        <TextBlock Text="{Binding ShareMessage}" Foreground="{StaticResource GymTextMuted}" FontSize="11" Margin="0,10,0,0"
+                                   TextWrapping="Wrap" TextAlignment="Center"
+                                   Visibility="{Binding HasShareMessage, Converter={StaticResource BoolToVis}}"/>
+                    </StackPanel>
+                </Border>
+            </StackPanel>
+        </ScrollViewer>
+
+        <!-- Fullscreen dialog (Android Dialog): white radius-16 card, big QR, caption; click anywhere to dismiss -->
+        <Grid Background="{StaticResource GymScrim}" Visibility="{Binding IsFullscreen, Converter={StaticResource BoolToVis}}">
+            <Grid.InputBindings><MouseBinding MouseAction="LeftClick" Command="{Binding CloseFullscreenCommand}"/></Grid.InputBindings>
+            <Border Background="White" CornerRadius="16" Padding="24" MaxWidth="380" Margin="24" VerticalAlignment="Center" HorizontalAlignment="Center">
+                <StackPanel>
+                    <Image Source="{Binding QrImage}" Stretch="Uniform" MaxWidth="320" RenderOptions.BitmapScalingMode="NearestNeighbor"/>
+                    <TextBlock Text="MAJOR GYM &#8212; Scan to mark attendance" Foreground="Black" FontSize="14" FontWeight="Bold"
+                               HorizontalAlignment="Center" Margin="0,12,0,0" TextWrapping="Wrap" TextAlignment="Center"/>
                 </StackPanel>
             </Border>
-
-            <Button Content="View Attendance Logs" Command="{Binding GoLogsCommand}"
-                    Style="{StaticResource GymPrimaryButton}" Margin="0,20,0,0" HorizontalAlignment="Stretch"/>
-        </StackPanel>
-    </ScrollViewer>
+        </Grid>
+    </Grid>
 </UserControl>
