@@ -33,3 +33,19 @@ The Windows scanner layer was already a close port; these changes fix the places
   DLLLOAD error this is the cause. Also confirm in Device Manager that the Hamster Pro 20 is bound to the SecuGen
   driver, not the Windows Biometric (WBF) driver.
 * If it still fails, send `%LOCALAPPDATA%\MajorGym\logs\scanner.log` (PREFLIGHT lines + first SCANNER_* error).
+
+## Driver bundled with the app
+* `vendor/SecuGenDriver/SgDrvSetupUniversal.exe` (SecuGen Universal Driver Installer v3.0.0.3 + its PDF guide) is checked in
+  and copied to `Drivers\` beside `MajorGym.exe` on every build, so the CI zip contains it.
+* If the SecuGen SDK cannot start, the Enroll Fingerprint screen shows an **Install Scanner Driver** button that launches
+  that installer with the normal Windows administrator (UAC) prompt. It is never installed silently.
+* The USB driver is machine-level (needs admin) — it cannot be loaded from the app folder, so each new PC runs it once.
+* Check the SecuGen redistribution terms before sharing the repo/zip publicly (keep the repo private if unsure).
+
+## Automated setup (replaces the manual checklist)
+* CI (`windows-build.yml`) downloads Microsoft's `vc_redist.x64.exe` and ships it in `Drivers\`.
+* **Install Scanner Driver** installs the Visual C++ runtime first (only if this PC lacks it), then the SecuGen driver,
+  each behind the normal Windows administrator prompt.
+* **Check Scanner** (Enroll Fingerprint screen) reports: Visual C++ runtime, sgfplib.dll, sgfdu*.dll driver modules,
+  scanner present on USB — plus the next step to take.
+* Cannot be automated: running a real capture test in GitHub (no scanner on the runner) or approving the admin prompt.

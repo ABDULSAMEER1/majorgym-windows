@@ -79,6 +79,45 @@ public static class ScannerDiagnostics
         }
     }
 
+    /// <summary>Plain-language self-check shown by the "Check Scanner" button — the same checks as the manual
+    /// troubleshooting steps (runtime, SecuGen DLLs, driver modules, USB presence). Never throws.</summary>
+    public static string BuildReport()
+    {
+        try
+        {
+            var baseDir = AppContext.BaseDirectory;
+            var sysDir = Environment.SystemDirectory;
+            bool Has(string name) => File.Exists(Path.Combine(baseDir, name)) || File.Exists(Path.Combine(sysDir, name));
+            string Mark(bool ok) => ok ? "OK" : "MISSING";
+
+            var vc = Has("vcruntime140.dll") && Has("msvcp140.dll");
+            var lib = File.Exists(Path.Combine(baseDir, "sgfplib.dll"));
+            var modules = new List<string>();
+            foreach (var dir in new[] { baseDir, sysDir })
+            {
+                try { modules.AddRange(Directory.GetFiles(dir, "sgfdu*.dll").Select(Path.GetFileName)!); } catch { }
+            }
+            var usb = UsbScannerPresence.TryDetect();
+            var lines = new List<string>
+            {
+                $"Visual C++ runtime: {Mark(vc)}",
+                $"SecuGen library (sgfplib.dll): {Mark(lib)}",
+                $"SecuGen driver modules (sgfdu*.dll): {(modules.Count == 0 ? "MISSING" : "OK (" + modules.Count + ")")}",
+                $"Scanner on USB: {(usb is null ? "unknown" : usb.Value ? "detected" : "NOT detected")}",
+            };
+            if (!string.IsNullOrEmpty(LastFailure)) lines.Add($"Last error: {LastFailure}");
+            lines.Add(!vc ? "Next: install the Visual C++ runtime (Install Scanner Driver does this)."
+                : modules.Count == 0 ? "Next: press Install Scanner Driver, then re-plug the scanner."
+                : usb == false ? "Next: plug the scanner in (try another USB 2.0 port)."
+                : "Everything needed is present. Press Start Enrollment.");
+            return string.Join(Environment.NewLine, lines);
+        }
+        catch (Exception e)
+        {
+            return $"Scanner check failed: {e.Message}";
+        }
+    }
+
     private static PreflightResult RunPreflight()
     {
         var baseDir = AppContext.BaseDirectory;

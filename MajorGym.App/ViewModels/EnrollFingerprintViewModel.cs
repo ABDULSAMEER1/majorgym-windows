@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.IO;
 using System.Diagnostics;
 using System.Windows.Input;
 using MajorGym.App.Navigation;
@@ -61,12 +62,18 @@ public sealed class EnrollFingerprintViewModel : INotifyPropertyChanged
     private bool _isSuccess;
     public bool IsSuccess { get => _isSuccess; private set { _isSuccess = value; OnPropertyChanged(); } }
 
+    private bool _needsDriver;
+    /// <summary>True when the SecuGen SDK/driver could not start — shows the "Install Scanner Driver" button.</summary>
+    public bool NeedsDriver { get => _needsDriver; private set { _needsDriver = value; OnPropertyChanged(); } }
+
     public bool CanStart => !IsBusy;
     public bool AlreadyEnrolled => Member.FingerprintTemplate is not null;
 
     public ICommand StartCommand { get; }
     public ICommand CancelCommand { get; }
     public ICommand DoneCommand { get; }
+    public ICommand InstallDriverCommand { get; }
+    public ICommand CheckScannerCommand { get; }
 
     public EnrollFingerprintViewModel(Repository repository, NavigationViewModel nav, Member member, Screen returnTo)
     {
@@ -78,6 +85,65 @@ public sealed class EnrollFingerprintViewModel : INotifyPropertyChanged
         StartCommand = new RelayCommand(() => _ = RunEnrollmentAsync(), () => CanStart);
         CancelCommand = new RelayCommand(Cancel, () => IsBusy);
         DoneCommand = new RelayCommand(() => _nav.NavigateTo(_returnTo));
+        InstallDriverCommand = new RelayCommand(() => _ = InstallDriverAsync());
+        CheckScannerCommand = new RelayCommand(() => _ = CheckScannerAsync(), () => CanStart);
+    }
+
+    /// <summary>Installs what the scanner needs, in order, each with the standard Windows administrator prompt:
+    /// (1) Microsoft Visual C++ 2015-2022 runtime if this PC lacks it, then (2) the SecuGen driver installer.
+    /// Nothing is installed silently without the user approving the Windows prompt.</summary>
+    private async Task InstallDriverAsync()
+    {
+        var dir = Path.Combine(AppContext.BaseDirectory, "Drivers");
+        var sg = Path.Combine(dir, "SgDrvSetupUniversal.exe");
+        var vc = Path.Combine(dir, "vc_redist.x64.exe");
+        if (!File.Exists(sg))
+        {
+            Fail("The driver installer was not found next to the application. Download the SecuGen Windows Driver Installer from secugen.com/drivers.");
+            return;
+        }
+        IsError = false;
+        try
+        {
+            var vcPresent = File.Exists(Path.Combine(Environment.SystemDirectory, "vcruntime140.dll"))
+                         && File.Exists(Path.Combine(Environment.SystemDirectory, "msvcp140.dll"));
+            if (!vcPresent && Environment.Is64BitProcess && File.Exists(vc))
+            {
+                StatusText = "Installing the Microsoft Visual C++ runtime... approve the Windows prompt.";
+                // 0 = ok, 3010 = ok (restart needed), 1638 = a newer version is already installed.
+                await RunElevatedAsync(vc, "/install /passive /norestart");
+            }
+
+            StatusText = "Installing the SecuGen scanner driver... approve the Windows prompt and finish the installer.";
+            await RunElevatedAsync(sg, "");
+            NeedsDriver = false;
+            StatusText = "Driver installed. Unplug and re-plug the scanner (restart the PC if asked), then press Start Enrollment.";
+        }
+        catch (System.ComponentModel.Win32Exception)
+        {
+            Fail("The installer needs administrator permission. Press Install Scanner Driver and choose Yes.");
+        }
+        catch (Exception e)
+        {
+            Trace.TraceError($"[EnrollFingerprintViewModel] driver install failed: {e.Message}");
+            Fail("The driver installer could not be started.");
+        }
+    }
+
+    private static async Task RunElevatedAsync(string exe, string args)
+    {
+        var psi = new ProcessStartInfo(exe, args) { UseShellExecute = true, Verb = "runas", WorkingDirectory = Path.GetDirectoryName(exe)! };
+        using var p = Process.Start(psi);
+        if (p is not null) await Task.Run(() => p.WaitForExit());
+    }
+
+    /// <summary>The manual troubleshooting checklist as one button: shows the runtime / SecuGen DLL / driver-module /
+    /// USB-presence results in plain language.</summary>
+    private async Task CheckScannerAsync()
+    {
+        IsError = false;
+        StatusText = "Checking the scanner setup...";
+        StatusText = await Task.Run(ScannerDiagnostics.BuildReport);
     }
 
     private void Cancel()
@@ -90,6 +156,7 @@ public sealed class EnrollFingerprintViewModel : INotifyPropertyChanged
         IsBusy = true;
         IsError = false;
         IsSuccess = false;
+        NeedsDriver = false;
         _cts = new CancellationTokenSource();
         var token = _cts.Token;
         var ownershipAcquired = false;
@@ -117,6 +184,7 @@ public sealed class EnrollFingerprintViewModel : INotifyPropertyChanged
             if (openResult is not FingerprintScanner.OpenResult.Success || App.ScannerHub.Current is not { } scanner)
             {
                 Trace.TraceWarning($"[EnrollFingerprintViewModel] scanner open failed result={openResult.GetType().Name} detail={ScannerDiagnostics.LastFailure ?? "(none)"} owner={App.ScannerOwnership.Current}");
+                NeedsDriver = openResult is FingerprintScanner.OpenResult.SdkUnavailable;
                 Fail(DescribeOpenFailure(openResult));
                 return;
             }
@@ -275,7 +343,7 @@ public sealed class EnrollFingerprintViewModel : INotifyPropertyChanged
     {
         FingerprintScanner.OpenResult.DeviceNotFound => "No fingerprint scanner was found. Please connect the SecuGen Hamster 20 and try again.",
         FingerprintScanner.OpenResult.Busy => "The scanner is busy. Please try again in a moment.",
-        FingerprintScanner.OpenResult.SdkUnavailable => "The fingerprint scanner software could not be started. Install the SecuGen FDx SDK Pro / device driver for this PC (and the Microsoft Visual C++ 2015-2022 Redistributable), then restart the app. Details: %LOCALAPPDATA%\\MajorGym\\logs\\scanner.log",
+        FingerprintScanner.OpenResult.SdkUnavailable => "The fingerprint scanner software could not be started. Press 'Install Scanner Driver' below (also install the Microsoft Visual C++ 2015-2022 Redistributable if it is missing), then re-plug the scanner and try again. Details: %LOCALAPPDATA%\\MajorGym\\logs\\scanner.log",
         FingerprintScanner.OpenResult.Error => "The scanner could not be opened. Please try again.",
         _ => "The scanner could not be opened. Please try again."
     };
