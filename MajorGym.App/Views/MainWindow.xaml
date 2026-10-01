@@ -73,9 +73,9 @@
                     <Viewbox Width="22" Height="22">
                         <Canvas Width="24" Height="24">
                             <Path Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType=ContentControl}}"
-                                  Data="M2,20 H22 V14 H2 Z M6,18.5 A1.1,1.1 0 1 1 6,16.3 A1.1,1.1 0 0 1 6,18.5 Z
+                                  Data="F0 M2,20 H22 V14 H2 Z M6,18.5 A1.1,1.1 0 1 1 6,16.3 A1.1,1.1 0 0 1 6,18.5 Z
                                         M2,4 V10 H22 V4 Z M6,8.7 A1.1,1.1 0 1 1 6,6.5 A1.1,1.1 0 0 1 6,8.7 Z
-                                        M2,11 H22 V13 H2 Z" FillRule="EvenOdd"/>
+                                        M2,11 H22 V13 H2 Z"/>
                         </Canvas>
                     </Viewbox>
                 </Button>
