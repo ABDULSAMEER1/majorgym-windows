@@ -45,6 +45,11 @@ public static class SyncChangeCodec
     private const string KIdPhoto = "idProofPhotoBase64";
     private const string KFingerprint = "fingerprintTemplateBase64";
 
+    /// <summary>Public aliases of the photo field keys so callers outside the codec (backup restore)
+    /// can force a photo into an UPDATE entry.</summary>
+    public const string PhotoKey = KPhoto;
+    public const string IdPhotoKey = KIdPhoto;
+
     private static readonly HashSet<string> AllKeys = new()
     {
         KName, KPhone, KPlan, KFee, KJoined, KExpiry, KHistory, KPasswordHash,
@@ -130,8 +135,14 @@ public static class SyncChangeCodec
     /// UPDATEs) field map. Writes any embedded photo/ID-photo/fingerprint bytes to this
     /// device's own storage via <paramref name="photoStore"/>. Returns null only if the
     /// payload is too malformed to use (missing even a name), so one bad record can't
-    /// break sync for everything else. (Android doc comment, preserved.)</summary>
-    public static Member? DecodeMemberFields(string recordId, JsonObject fields, long timestampMillis, PhotoStore photoStore)
+    /// break sync for everything else. (Android doc comment, preserved.)
+    /// Windows hardening with no Android counterpart: <paramref name="existingPhotoPath"/> is the
+    /// profile photo this device already holds for the member. If the merged record carries no
+    /// usable photo (empty/missing field, or the write failed) that existing photo is KEPT rather
+    /// than silently clearing the member's picture — the app can only replace a profile photo,
+    /// never remove it, so a blank here always means "no data", never "deleted".</summary>
+    public static Member? DecodeMemberFields(string recordId, JsonObject fields, long timestampMillis, PhotoStore photoStore,
+        string? existingPhotoPath = null)
     {
         if (fields[KName] is null) return null;
 
@@ -142,6 +153,8 @@ public static class SyncChangeCodec
             try { photoPath = photoStore.WriteMemberPhoto(recordId, Convert.FromBase64String(photoB64)); }
             catch { /* skip this photo, rest of the record still applies */ }
         }
+        if (photoPath is null && !string.IsNullOrWhiteSpace(existingPhotoPath) && File.Exists(existingPhotoPath))
+            photoPath = existingPhotoPath;
 
         var idProofPhotoPath = "";
         var idPhotoB64 = (string?)fields[KIdPhoto] ?? "";

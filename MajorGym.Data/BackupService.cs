@@ -168,11 +168,23 @@ public static class BackupService
         try { WriteSafetyBackupSnapshot(repository, photoStore, store); }
         catch (Exception e) { Trace.TraceWarning($"[BackupService] safety snapshot failed (non-fatal): {e.Message}"); }
 
+        // The photo FILES are written after the commit (below), but the sync change-log entries the
+        // restore writes must already carry the photo bytes — otherwise every restored member is
+        // announced to other devices with an EMPTY photo, which then wins the merge and wipes the
+        // picture on both phone and PC. Hand the in-memory bytes to the restore, keyed by final path.
+        var pendingPhotos = new Dictionary<string, byte[]>(StringComparer.OrdinalIgnoreCase);
+        foreach (var pm in parsed.Members)
+        {
+            if (pm.PhotoBytes is not null && !string.IsNullOrWhiteSpace(pm.Member.PhotoPath)) pendingPhotos[pm.Member.PhotoPath] = pm.PhotoBytes;
+            if (pm.IdProofPhotoBytes is not null && !string.IsNullOrWhiteSpace(pm.Member.IdProofPhotoPath)) pendingPhotos[pm.Member.IdProofPhotoPath] = pm.IdProofPhotoBytes;
+        }
+
         RestoreCounts counts;
         try
         {
             counts = repository.RestoreBackup(
-                parsed.Members.Select(m => m.Member).ToList(), parsed.Attendance, parsed.Archived);
+                parsed.Members.Select(m => m.Member).ToList(), parsed.Attendance, parsed.Archived,
+                path => pendingPhotos.TryGetValue(path, out var bytes) ? bytes : null);
         }
         catch (Exception e)
         {

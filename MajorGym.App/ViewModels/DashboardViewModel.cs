@@ -35,6 +35,15 @@ public sealed class RelayCommand(Action execute, Func<bool>? canExecute = null) 
     public void RaiseCanExecuteChanged() => CommandManager.InvalidateRequerySuggested();
 }
 
+/// <summary>One "Needs Attention" row (Android: the member rows under the Expired Archive card).</summary>
+public sealed class AttentionRowViewModel
+{
+    public required Member Member { get; init; }
+    public required MemberStatus Status { get; init; }
+    public required string DaysText { get; init; }
+    public required ICommand OpenProfile { get; init; }
+}
+
 /// <summary>
 /// Ported from Android's <c>DashboardScreen</c> composable (Screens.kt lines ~402-560).
 ///
@@ -70,6 +79,23 @@ public sealed class DashboardViewModel : INotifyPropertyChanged
         // Active/Total AND here).
         DueCount = members.Count(m => m.Fee > 0.0);
 
+        // Android "NEEDS ATTENTION": 0..7 days remaining, soonest expiry first. (Android filters on
+        // daysBetweenNow(expiryMillis) in 0..7 and sorts by expiryMillis.)
+        foreach (var m in members
+                     .Where(m => { var d = DateUtils.DaysBetweenNow(m.ExpiryMillis); return d >= 0 && d <= 7; })
+                     .OrderBy(m => m.ExpiryMillis))
+        {
+            var id = m.Id;
+            var days = DateUtils.DaysBetweenNow(m.ExpiryMillis);
+            Attention.Add(new AttentionRowViewModel
+            {
+                Member = m,
+                Status = MemberStatusExtensions.StatusOf(m.ExpiryMillis),
+                DaysText = days < 0 ? $"Expired {-days}d ago" : $"Expires in {days}d",
+                OpenProfile = new RelayCommand(() => _nav.NavigateTo(new Screen.Profile(id)))
+            });
+        }
+
         MasterPrivacyOn = _privacy.MasterPrivacyOn;
         TotalVisible = _privacy.IsNumberVisible(DashboardCard.TOTAL);
         ActiveVisible = _privacy.IsNumberVisible(DashboardCard.ACTIVE);
@@ -85,6 +111,11 @@ public sealed class DashboardViewModel : INotifyPropertyChanged
         GoExpiredArchive = new RelayCommand(() => _nav.NavigateTo(new Screen.ExpiredArchive()));
         GoAddMember = new RelayCommand(() => _nav.NavigateTo(new Screen.Add()));
     }
+
+    /// <summary>Members expiring within 7 days, shown below the Expired Archive card.</summary>
+    public List<AttentionRowViewModel> Attention { get; } = new();
+    public bool HasAttention => Attention.Count > 0;
+    public string AttentionHeader => $"NEEDS ATTENTION ({Attention.Count})";
 
     public bool MasterPrivacyOn { get; }
     public bool TotalVisible { get; }

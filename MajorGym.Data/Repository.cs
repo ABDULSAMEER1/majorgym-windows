@@ -119,7 +119,8 @@ public sealed class Repository
     /// (the caller holds the change-log lock). <paramref name="stampMissingUpdatedAt"/> is
     /// false for backup restore: Android's mergeAll stores the incoming updatedAtMillis
     /// untouched, even when it is 0.</summary>
-    private void SaveCore(Member member, SqliteTransaction tx, bool stampMissingUpdatedAt)
+    private void SaveCore(Member member, SqliteTransaction tx, bool stampMissingUpdatedAt,
+        Func<string, byte[]?>? pendingPhotoBytes = null)
     {
         var existing = GetByIdOnceNoLock(member.Id, tx);
         var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
@@ -139,12 +140,21 @@ public sealed class Repository
                 OriginDeviceId = _deviceId,
                 Seq = NextSeqNoLock(_deviceId, tx),
                 TimestampMillis = logTs,
-                FieldsJson = SyncChangeCodec.EncodeMember(toStore).ToJsonString()
+                FieldsJson = SyncChangeCodec.EncodeMember(toStore, null, pendingPhotoBytes).ToJsonString()
             }, tx);
         }
         else
         {
             var changedKeys = SyncChangeCodec.DiffKeys(existing, toStore);
+            // Backup restore writes the photo files only AFTER its transaction commits, so at this
+            // point the bytes live in memory, not on disk: make sure they still travel with the entry.
+            if (pendingPhotoBytes is not null)
+            {
+                if (!string.IsNullOrWhiteSpace(toStore.PhotoPath) && pendingPhotoBytes(toStore.PhotoPath) is not null)
+                    changedKeys.Add(SyncChangeCodec.PhotoKey);
+                if (!string.IsNullOrWhiteSpace(toStore.IdProofPhotoPath) && pendingPhotoBytes(toStore.IdProofPhotoPath) is not null)
+                    changedKeys.Add(SyncChangeCodec.IdPhotoKey);
+            }
             if (changedKeys.Count > 0)
             {
                 InsertChangeLog(new SyncChangeLogEntry
@@ -156,7 +166,7 @@ public sealed class Repository
                     OriginDeviceId = _deviceId,
                     Seq = NextSeqNoLock(_deviceId, tx),
                     TimestampMillis = logTs,
-                    FieldsJson = SyncChangeCodec.EncodeMember(toStore, changedKeys).ToJsonString()
+                    FieldsJson = SyncChangeCodec.EncodeMember(toStore, changedKeys, pendingPhotoBytes).ToJsonString()
                 }, tx);
             }
         }
@@ -707,7 +717,8 @@ public sealed class Repository
     /// those, and only after this commit succeeded.
     /// </summary>
     public RestoreCounts RestoreBackup(
-        IReadOnlyList<Member> members, IReadOnlyList<AttendanceRecord> attendance, IReadOnlyList<ArchivedMember> archivedMembers)
+        IReadOnlyList<Member> members, IReadOnlyList<AttendanceRecord> attendance, IReadOnlyList<ArchivedMember> archivedMembers,
+        Func<string, byte[]?>? pendingPhotoBytes = null)
     {
         _changeLogLock.Wait();
         try
@@ -730,7 +741,7 @@ public sealed class Repository
                     phoneReplaced += del.ExecuteNonQuery();
                 }
 
-                SaveCore(m, tx, stampMissingUpdatedAt: false);
+                SaveCore(m, tx, stampMissingUpdatedAt: false, pendingPhotoBytes);
                 applied.Add(m.Id);
             }
 
@@ -1010,11 +1021,13 @@ public sealed class Repository
             lastLifecycleEntry.TimestampMillis,
             sameLifecycleUpdates.Count > 0 ? sameLifecycleUpdates.Max(e => e.TimestampMillis) : lastLifecycleEntry.TimestampMillis);
 
-        var member = SyncChangeCodec.DecodeMemberFields(recordId, merged, latestTimestamp, photoStore);
+        var existingLocal = GetByIdOnceNoLock(recordId, tx);
+        var member = SyncChangeCodec.DecodeMemberFields(recordId, merged, latestTimestamp, photoStore, existingLocal?.PhotoPath);
         if (member is null) return;
         try
         {
             Upsert(EncryptedForStorage(member), tx);
+            RepublishKeptPhoto(member, merged, latestTimestamp, tx);
         }
         catch (SqliteException)
         {
@@ -1023,6 +1036,62 @@ public sealed class Repository
             // not abort the whole sync (Android logs and continues the same way). The change
             // itself stays in the log, so it is never silently lost.
         }
+    }
+
+    /// <summary>
+    /// Windows hardening (no Android counterpart). When the merged record said "no profile photo" but
+    /// this device still holds the member's real photo (kept by <see cref="SyncChangeCodec.DecodeMemberFields"/>),
+    /// the other devices are the ones with the wrong picture: log a newer UPDATE that carries the
+    /// photo so every peer's replay ends up with it again. Idempotent — once that UPDATE is in the
+    /// log the merged record has a photo and this no longer fires.
+    /// </summary>
+    private void RepublishKeptPhoto(Member member, JsonObject merged, long latestTimestamp, SqliteTransaction tx)
+    {
+        if (!string.IsNullOrWhiteSpace((string?)merged[SyncChangeCodec.PhotoKey])) return;
+        if (string.IsNullOrWhiteSpace(member.PhotoPath) || !File.Exists(member.PhotoPath)) return;
+        string b64;
+        try { b64 = Convert.ToBase64String(File.ReadAllBytes(member.PhotoPath)); }
+        catch (IOException) { return; }
+        if (b64.Length == 0) return;
+
+        InsertChangeLog(new SyncChangeLogEntry
+        {
+            ChangeId = Guid.NewGuid().ToString(),
+            EntityType = SyncEntityType.Member,
+            RecordId = member.Id,
+            Operation = SyncOperation.Update,
+            OriginDeviceId = _deviceId,
+            Seq = NextSeqNoLock(_deviceId, tx),
+            TimestampMillis = Math.Max(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), latestTimestamp + 1),
+            FieldsJson = new JsonObject { [SyncChangeCodec.PhotoKey] = b64 }.ToJsonString()
+        }, tx);
+    }
+
+    /// <summary>
+    /// Windows hardening (no Android counterpart). Re-attaches a member's profile photo when the
+    /// photo FILE is still on disk (photos\&lt;id&gt;.jpg) but the member row lost its path — which is
+    /// what an earlier sync with a photo-less ADD entry left behind. Saving through
+    /// <see cref="Save"/> logs a fresh UPDATE carrying the photo, so phones that lost the picture
+    /// get it back on their next sync. Returns how many members were repaired.
+    /// </summary>
+    public int AdoptOrphanedPhotos(PhotoStore photoStore)
+    {
+        var repaired = 0;
+        foreach (var m in GetAll())
+        {
+            if (!string.IsNullOrWhiteSpace(m.PhotoPath)) continue;
+            var path = photoStore.MemberPhotoPathFor(m.Id);
+            if (path is null || !File.Exists(path)) continue;
+            try
+            {
+                var adopted = CloneWithUpdatedAt(m, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+                adopted.PhotoPath = path;
+                Save(adopted);
+                repaired++;
+            }
+            catch (SqliteException) { /* leave this one alone; never block a sync over a photo */ }
+        }
+        return repaired;
     }
 
     /// <summary>Attendance: a DELETE anywhere in the history wins; otherwise the ADD is applied via an

@@ -1,37 +1,45 @@
 <UserControl x:Class="MajorGym.App.Views.DashboardView"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:ctl="clr-namespace:MajorGym.App.Controls">
     <ScrollViewer Padding="16,20,16,90">
         <StackPanel>
             <TextBlock Text="MAJOR GYM" Style="{StaticResource GymHeaderText}" Margin="0,0,0,16"/>
 
+            <!-- Android: when Dashboard Privacy Mode is ON nothing but the header and this notice renders. -->
+            <StackPanel Visibility="{Binding MasterPrivacyOn, Converter={StaticResource BoolToVis}}" HorizontalAlignment="Center" Margin="0,60,0,0">
+                <TextBlock Text="&#xED1A;" FontFamily="{StaticResource GymIconFont}" FontSize="36" Foreground="{StaticResource GymTextFaint}" HorizontalAlignment="Center"/>
+                <TextBlock Text="Dashboard Privacy Mode is ON" Foreground="{StaticResource GymTextFaint}" FontSize="13" FontWeight="Medium" Margin="0,10,0,0" HorizontalAlignment="Center"/>
+            </StackPanel>
+
+            <StackPanel Visibility="{Binding MasterPrivacyOn, Converter={StaticResource InverseBoolToVis}}">
             <UniformGrid Columns="2" Rows="2">
                 <Border Style="{StaticResource GymCard}" Margin="0,0,5,10" Cursor="Hand"
                         MouseLeftButtonUp="StatCard_Click" Tag="{Binding GoTotal}">
                     <StackPanel>
                         <TextBlock Text="Total Members" Style="{StaticResource GymBody}"/>
-                        <TextBlock Text="{Binding TotalDisplay}" Foreground="{StaticResource GymText}" FontSize="28" FontWeight="Bold" Margin="0,6,0,0"/>
+                        <TextBlock Text="{Binding TotalDisplay}" Visibility="{Binding TotalVisible, Converter={StaticResource BoolToVis}}" Foreground="{StaticResource GymText}" FontSize="28" FontWeight="Bold" Margin="0,6,0,0"/>
                     </StackPanel>
                 </Border>
                 <Border Style="{StaticResource GymCard}" Margin="5,0,0,10" Cursor="Hand"
                         MouseLeftButtonUp="StatCard_Click" Tag="{Binding GoActive}">
                     <StackPanel>
                         <TextBlock Text="Active" Style="{StaticResource GymBody}"/>
-                        <TextBlock Text="{Binding ActiveDisplay}" Foreground="{StaticResource GymSuccess}" FontSize="28" FontWeight="Bold" Margin="0,6,0,0"/>
+                        <TextBlock Text="{Binding ActiveDisplay}" Visibility="{Binding ActiveVisible, Converter={StaticResource BoolToVis}}" Foreground="{StaticResource GymSuccess}" FontSize="28" FontWeight="Bold" Margin="0,6,0,0"/>
                     </StackPanel>
                 </Border>
                 <Border Style="{StaticResource GymCard}" Margin="0,0,5,10" Cursor="Hand"
                         MouseLeftButtonUp="StatCard_Click" Tag="{Binding GoExpiring}">
                     <StackPanel>
                         <TextBlock Text="Expiring Soon" Style="{StaticResource GymBody}"/>
-                        <TextBlock Text="{Binding ExpiringDisplay}" Foreground="{StaticResource GymWarning}" FontSize="28" FontWeight="Bold" Margin="0,6,0,0"/>
+                        <TextBlock Text="{Binding ExpiringDisplay}" Visibility="{Binding ExpiringVisible, Converter={StaticResource BoolToVis}}" Foreground="{StaticResource GymWarning}" FontSize="28" FontWeight="Bold" Margin="0,6,0,0"/>
                     </StackPanel>
                 </Border>
                 <Border Style="{StaticResource GymCard}" Margin="5,0,0,10" Cursor="Hand"
                         MouseLeftButtonUp="StatCard_Click" Tag="{Binding GoExpired}">
                     <StackPanel>
                         <TextBlock Text="Expired" Style="{StaticResource GymBody}"/>
-                        <TextBlock Text="{Binding ExpiredDisplay}" Foreground="{StaticResource GymDanger}" FontSize="28" FontWeight="Bold" Margin="0,6,0,0"/>
+                        <TextBlock Text="{Binding ExpiredDisplay}" Visibility="{Binding ExpiredVisible, Converter={StaticResource BoolToVis}}" Foreground="{StaticResource GymDanger}" FontSize="28" FontWeight="Bold" Margin="0,6,0,0"/>
                     </StackPanel>
                 </Border>
             </UniformGrid>
@@ -39,7 +47,7 @@
             <Border Style="{StaticResource GymCard}" Margin="0,4,0,10" Cursor="Hand"
                     MouseLeftButtonUp="StatCard_Click" Tag="{Binding GoDue}">
                 <DockPanel>
-                    <TextBlock Text="{Binding DueDisplay}" Foreground="{StaticResource GymDanger}" FontSize="18" FontWeight="Bold" DockPanel.Dock="Right" VerticalAlignment="Center"/>
+                    <TextBlock Text="{Binding DueDisplay}" Visibility="{Binding DueVisible, Converter={StaticResource BoolToVis}}" Foreground="{StaticResource GymDanger}" FontSize="18" FontWeight="Bold" DockPanel.Dock="Right" VerticalAlignment="Center"/>
                     <StackPanel>
                         <TextBlock Text="Due Members" Foreground="{StaticResource GymText}" FontSize="15" FontWeight="SemiBold"/>
                         <TextBlock Text="Members with an outstanding due amount" Style="{StaticResource GymBody}" Margin="0,2,0,0"/>
@@ -55,8 +63,33 @@
                 </StackPanel>
             </Border>
 
+            <!-- Android "NEEDS ATTENTION (n)": members whose membership ends within the next 7 days
+                 (0..7 days remaining), soonest first, shown directly below the Expired Archive card.
+                 Whole row opens the member's profile. -->
+            <StackPanel Visibility="{Binding HasAttention, Converter={StaticResource BoolToVis}}" Margin="0,4,0,0">
+                <TextBlock Text="{Binding AttentionHeader}" Foreground="{StaticResource GymTextFaint}" FontSize="11" FontWeight="Bold" Margin="0,0,0,8"/>
+                <ItemsControl ItemsSource="{Binding Attention}">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <Border Style="{StaticResource GymCard}" Margin="0,0,0,8" Padding="12" Cursor="Hand"
+                                    MouseLeftButtonUp="StatCard_Click" Tag="{Binding OpenProfile}">
+                                <DockPanel>
+                                    <ctl:StatusBadge DockPanel.Dock="Right" Status="{Binding Status}" VerticalAlignment="Center"/>
+                                    <ctl:StatusRing DockPanel.Dock="Left" PhotoPath="{Binding Member.PhotoPath}" MemberName="{Binding Member.Name}" Status="{Binding Status}" RingSize="44"/>
+                                    <StackPanel Margin="12,0,8,0" VerticalAlignment="Center">
+                                        <TextBlock Text="{Binding Member.Name}" Foreground="{StaticResource GymText}" FontSize="15" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"/>
+                                        <TextBlock Text="{Binding DaysText}" Foreground="{StaticResource GymTextMuted}" FontSize="12"/>
+                                    </StackPanel>
+                                </DockPanel>
+                            </Border>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </StackPanel>
+
             <Button Content="+ Add Member" Style="{StaticResource GymPrimaryButton}" Margin="0,10,0,0"
                     HorizontalAlignment="Left" Command="{Binding GoAddMember}"/>
+            </StackPanel>
         </StackPanel>
     </ScrollViewer>
 </UserControl>

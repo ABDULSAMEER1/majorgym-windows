@@ -4,14 +4,17 @@
     <!-- Android's MemberRow: status ring, name, "phone · plan", "Expires date", (Due: amount
          on the Due Members list only), status badge, Renew pill — the whole row minus the
          pill opens the profile; the pill alone starts a renewal. -->
-    <Border Background="{StaticResource GymCardGlassGradient}" BorderBrush="{StaticResource GymBorder}" BorderThickness="1" CornerRadius="16" Padding="12">
+    <Border Background="{StaticResource GymCardGlassGradient}" BorderBrush="{StaticResource GymBorder}" BorderThickness="1" CornerRadius="16" Padding="12" Cursor="Hand">
+        <!-- Whole card (anywhere inside its border, not just the name/photo) opens the profile, like
+             Android's Modifier.clickable on the entire row. The Renew button marks its own mouse
+             events handled, so pressing it never also triggers this binding. -->
+        <Border.InputBindings><MouseBinding MouseAction="LeftClick" Command="{Binding OpenProfile}"/></Border.InputBindings>
         <DockPanel>
             <StackPanel DockPanel.Dock="Right" HorizontalAlignment="Right" Margin="8,0,0,0">
                 <ctl:StatusBadge xmlns:ctl="clr-namespace:MajorGym.App.Controls" Status="{Binding Status}" HorizontalAlignment="Right"/>
                 <Button Content="Renew" Command="{Binding Renew}" Style="{StaticResource GymRenewPill}" HorizontalAlignment="Right" Margin="0,8,0,0"/>
             </StackPanel>
-            <StackPanel Orientation="Horizontal" Cursor="Hand">
-                <StackPanel.InputBindings><MouseBinding MouseAction="LeftClick" Command="{Binding OpenProfile}"/></StackPanel.InputBindings>
+            <StackPanel Orientation="Horizontal">
                 <ctl:StatusRing xmlns:ctl="clr-namespace:MajorGym.App.Controls" PhotoPath="{Binding Member.PhotoPath}" MemberName="{Binding Member.Name}" Status="{Binding Status}" RingSize="48"/>
                 <StackPanel Margin="12,0,0,0" VerticalAlignment="Center">
                     <TextBlock Text="{Binding Member.Name}" Foreground="{StaticResource GymText}" FontSize="15" FontWeight="SemiBold"/>

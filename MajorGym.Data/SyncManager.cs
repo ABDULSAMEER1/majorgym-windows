@@ -73,6 +73,9 @@ public sealed class SyncManager
             // Give any pre-existing record that predates the change log a synthetic ADD entry BEFORE
             // this device's version vector is computed (Android: backfillPreSyncHistoryIfNeeded).
             await _db.RunAsync(() => { _repository.BackfillPreSyncHistoryIfNeeded(_prefs); return 0; }).ConfigureAwait(false);
+            // Windows hardening: re-attach any profile photo whose file is on disk but whose path was
+            // lost, so it is logged (and sent) before the version vector below is computed.
+            await _db.RunAsync(() => _repository.AdoptOrphanedPhotos(_photoStore)).ConfigureAwait(false);
 
             var code = _prefs.SyncCode;
             if (string.IsNullOrWhiteSpace(code)) return new SyncOutcome.NoCodeSet();
