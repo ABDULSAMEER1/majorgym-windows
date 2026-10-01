@@ -48,6 +48,11 @@ public partial class App : System.Windows.Application
         base.OnStartup(e);
         ShutdownMode = ShutdownMode.OnExplicitShutdown; // no MainWindow exists yet while the optional splash plays
 
+        // Scanner troubleshooting log (%LOCALAPPDATA%\MajorGym\logs\scanner.log). A Release WPF build has no
+        // Trace listener, so without this every [FingerprintScanner]/[ScannerHub]/[FingerprintKioskLoop]
+        // message was discarded. Contains no biometric or member data.
+        ScannerDiagnostics.Initialize(Path.Combine(AppDataDirectory, "logs", "scanner.log"));
+
         Directory.CreateDirectory(AppDataDirectory);
         Database = AppDatabase.OpenOrCreate(AppDataDirectory);
         SyncPrefs = new SyncPrefs(AppDataDirectory);
@@ -101,6 +106,7 @@ public partial class App : System.Windows.Application
         main.Show();
 
         KioskLoop.RequestStart(); // runs continuously in the background for the app's whole lifetime from here on
+        KioskLoop.StartRetryMonitor(); // Android parity: re-checks every 3 s and (re)starts the loop when a scanner is present
     }
 
     protected override void OnExit(ExitEventArgs e)

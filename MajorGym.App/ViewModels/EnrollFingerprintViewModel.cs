@@ -22,7 +22,7 @@ namespace MajorGym.App.ViewModels;
 /// cancelled by the user.
 ///
 /// Enrollment reliability behavior preserved from the Android-derived brief:
-///  - up to 3 retries with 400ms/800ms/1200ms backoff specifically for a Busy result on
+///  - up to 2 retries with 400ms/800ms backoff (Android: 3 attempts total) specifically for a Busy result on
 ///    Open (<see cref="OpenWithRetriesAsync"/>) — distinct from the kiosk loop's own
 ///    5-consecutive-error/500ms capture-retry policy, which is a different situation
 ///    (an already-open scanner intermittently failing to read a finger) from this one (the
@@ -35,9 +35,12 @@ namespace MajorGym.App.ViewModels;
 /// </summary>
 public sealed class EnrollFingerprintViewModel : INotifyPropertyChanged
 {
-    private static readonly int[] BusyRetryDelaysMs = { 400, 800, 1200 };
-    private const int AwaitKioskReleaseTimeoutMs = 5000;
-    private const int CaptureTimeoutMs = 15000; // generous — this is an attended, one-shot enrollment, not the kiosk's silent background loop
+    // Android parity (FingerprintScreens.kt): OPEN_MAX_ATTEMPTS = 3 with OPEN_RETRY_DELAY_MS * attempt
+    // (400 ms, then 800 ms) — i.e. two retries after the first attempt; RELEASE_WAIT_MS = 7000;
+    // enrollment captures with FingerprintScanner's default 10 000 ms timeout.
+    private static readonly int[] BusyRetryDelaysMs = { 400, 800 };
+    private const int AwaitKioskReleaseTimeoutMs = 7000;
+    private const int CaptureTimeoutMs = 10000;
 
     private readonly Repository _repository;
     private readonly NavigationViewModel _nav;
@@ -99,8 +102,10 @@ public sealed class EnrollFingerprintViewModel : INotifyPropertyChanged
             var released = await App.ScannerOwnership.AwaitReleasedAsync(AwaitKioskReleaseTimeoutMs);
             if (!released)
             {
-                Fail("The scanner is busy. Please try again in a moment.");
-                return;
+                // Android parity: log and carry on ("trying anyway") rather than failing outright.
+                // Native calls on the shared session are serialized inside FingerprintScanner, and
+                // RequestStopAsync above has already waited for the kiosk loop task to finish.
+                Trace.TraceWarning($"[EnrollFingerprintViewModel] SCANNER_OPEN_FAILED kiosk did not release in time (owner={App.ScannerOwnership.Current}), trying anyway");
             }
             token.ThrowIfCancellationRequested();
 
@@ -111,6 +116,7 @@ public sealed class EnrollFingerprintViewModel : INotifyPropertyChanged
             token.ThrowIfCancellationRequested();
             if (openResult is not FingerprintScanner.OpenResult.Success || App.ScannerHub.Current is not { } scanner)
             {
+                Trace.TraceWarning($"[EnrollFingerprintViewModel] scanner open failed result={openResult.GetType().Name} detail={ScannerDiagnostics.LastFailure ?? "(none)"} owner={App.ScannerOwnership.Current}");
                 Fail(DescribeOpenFailure(openResult));
                 return;
             }
@@ -208,7 +214,7 @@ public sealed class EnrollFingerprintViewModel : INotifyPropertyChanged
         }
     }
 
-    /// <summary>Up to 3 retries with 400ms/800ms/1200ms backoff specifically for a Busy
+    /// <summary>Up to 2 retries with 400ms/800ms backoff (Android parity) specifically for a Busy
     /// Open() result — see class doc comment.</summary>
     private async Task<FingerprintScanner.OpenResult> OpenWithRetriesAsync()
     {
@@ -227,6 +233,7 @@ public sealed class EnrollFingerprintViewModel : INotifyPropertyChanged
     {
         FingerprintScanner.OpenResult.DeviceNotFound => "No fingerprint scanner was found. Please connect the SecuGen Hamster 20 and try again.",
         FingerprintScanner.OpenResult.Busy => "The scanner is busy. Please try again in a moment.",
+        FingerprintScanner.OpenResult.SdkUnavailable => "The fingerprint scanner software could not be started. Please restart the application, or reinstall the SecuGen scanner driver.",
         FingerprintScanner.OpenResult.Error => "The scanner could not be opened. Please try again.",
         _ => "The scanner could not be opened. Please try again."
     };

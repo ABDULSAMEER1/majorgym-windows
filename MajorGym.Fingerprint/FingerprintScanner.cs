@@ -57,6 +57,15 @@ public sealed class FingerprintScanner : IDisposable
         public sealed class DeviceNotFound : OpenResult { public static readonly DeviceNotFound Instance = new(); }
         public sealed class Busy : OpenResult { public static readonly Busy Instance = new(); }
         public sealed class Error(int code) : OpenResult { public int Code { get; } = code; }
+        /// <summary>The SecuGen SDK itself could not start (managed wrapper / native DLL failed to
+        /// load, architecture mismatch, or Init reported a DLL-load failure). Distinct from
+        /// <see cref="DeviceNotFound"/>: the scanner may well be plugged in. The full reason is
+        /// in the diagnostics log and <see cref="ScannerDiagnostics.LastFailure"/>.</summary>
+        public sealed class SdkUnavailable(int code, string reason) : OpenResult
+        {
+            public int Code { get; } = code;
+            public string Reason { get; } = reason;
+        }
         // Note: no PermissionDenied case — Windows has no USB-permission-dialog step
         // (see class doc above); a missing/inaccessible device surfaces as DeviceNotFound
         // or Busy instead, exactly as Android's own OpenDevice-failure branch already did
@@ -107,6 +116,13 @@ public sealed class FingerprintScanner : IDisposable
                 ReleaseNowLocked();
             }
 
+            // Facts that decide whether the SDK can load at all (architecture, native DLL
+            // placement, VC++ runtime, sgfplib.dll load test). Logged once; blocks only on a
+            // definitive sgfplib.dll load failure.
+            var preflight = ScannerDiagnostics.RunPreflightOnce();
+            if (!preflight.CanProceed)
+                return FailSdk(0, preflight.Summary);
+
             SGFingerPrintManager fpm;
             try
             {
@@ -114,8 +130,10 @@ public sealed class FingerprintScanner : IDisposable
             }
             catch (Exception e)
             {
-                Trace.TraceError($"[FingerprintScanner] SCANNER_INIT_FAILED constructing SGFingerPrintManager: {e.Message}");
-                return OpenResult.DeviceNotFound.Instance;
+                // Previously reported as "device not found". A throw here means the managed or
+                // native SDK could not be loaded (BadImageFormat, missing DLL/VC++ runtime, ...)
+                // — the scanner being plugged in or not has not even been asked yet.
+                return FailSdk(0, $"constructing SGFingerPrintManager threw {e.GetType().Name}: {e.Message}", e);
             }
             _fpm = fpm;
 
@@ -126,21 +144,35 @@ public sealed class FingerprintScanner : IDisposable
             }
             catch (Exception e)
             {
-                Trace.TraceError($"[FingerprintScanner] SCANNER_INIT_FAILED exception: {e.Message}");
                 _fpm = null;
-                return OpenResult.DeviceNotFound.Instance;
+                return FailSdk(0, $"Init(DEV_AUTO) threw {e.GetType().Name}: {e.Message}", e);
             }
+            Trace.TraceInformation($"[FingerprintScanner] SCANNER_INIT_RESULT code={initError} ({ErrorName(initError)})");
             if (initError != (int)SGFPMError.ERROR_NONE)
             {
-                Trace.TraceWarning($"[FingerprintScanner] SCANNER_INIT_FAILED code={initError}");
                 _fpm = null;
-                return OpenResult.DeviceNotFound.Instance;
+                return ClassifyInitFailure(initError);
             }
             _initialized = true;
 
             // No USB-permission step here — see class doc above: the Windows SecuGen
             // driver owns device access once installed, unlike Android's UsbManager
             // per-app permission grant.
+
+            // Diagnostic only, on THIS manager (no second SDK object): how many SecuGen devices
+            // the SDK itself can see. Never changes the outcome; used to tell "no device" from
+            // "device present but would not open" if OpenDevice fails below.
+            var enumerated = -1;
+            try
+            {
+                var enumError = fpm.EnumerateDevice();
+                enumerated = fpm.NumberOfDevice;
+                Trace.TraceInformation($"[FingerprintScanner] SCANNER_ENUMERATE result={enumError} ({ErrorName(enumError)}) numberOfDevice={enumerated}");
+            }
+            catch (Exception e)
+            {
+                Trace.TraceWarning($"[FingerprintScanner] SCANNER_ENUMERATE exception: {e.GetType().Name}: {e.Message}");
+            }
 
             int openError;
             try
@@ -150,19 +182,27 @@ public sealed class FingerprintScanner : IDisposable
                 // is Major Gym's only supported configuration (Stage 1 report §4.2 — one
                 // scanner per kiosk PC). This is the Windows-side equivalent of Android's
                 // OpenDevice(0L) auto-first-device behavior, not a behavioral change.
+                // (Value 597 confirmed in the shipped assembly's SGFPMPortAddr metadata.)
                 openError = fpm.OpenDevice((int)SGFPMPortAddr.USB_AUTO_DETECT);
             }
             catch (Exception e)
             {
-                Trace.TraceError($"[FingerprintScanner] SCANNER_OPEN_FAILED exception: {e.Message}");
+                ScannerDiagnostics.LastFailure = $"OpenDevice threw {e.GetType().Name}: {e.Message}";
+                Trace.TraceError($"[FingerprintScanner] SCANNER_OPEN_FAILED exception: {e}");
                 return OpenResult.Busy.Instance;
             }
+            Trace.TraceInformation($"[FingerprintScanner] SCANNER_OPEN_RESULT code={openError} ({ErrorName(openError)})");
             if (openError != (int)SGFPMError.ERROR_NONE)
             {
-                Trace.TraceWarning($"[FingerprintScanner] SCANNER_OPEN_FAILED code={openError}");
-                // A nonzero code here most often means the device is already claimed by
-                // another open handle — e.g. the kiosk loop didn't release it in time
-                // (Android doc comment, preserved — same meaning on Windows).
+                ScannerDiagnostics.LastFailure = $"OpenDevice failed code={openError} ({ErrorName(openError)}) enumerated={enumerated}";
+                // Android doc comment, preserved: a nonzero code most often means the device is
+                // already claimed by another open handle (Busy → caller retries). Windows adds
+                // two cases the SDK reports precisely: the device is gone, or its driver module
+                // would not load.
+                if (openError == (int)SGFPMError.ERROR_DEVICE_NOT_FOUND || enumerated == 0)
+                    return OpenResult.DeviceNotFound.Instance;
+                if (openError == (int)SGFPMError.ERROR_DRVLOAD_FAILED)
+                    return new OpenResult.SdkUnavailable(openError, ScannerDiagnostics.LastFailure);
                 return OpenResult.Busy.Instance;
             }
             _deviceOpened = true;
@@ -170,7 +210,15 @@ public sealed class FingerprintScanner : IDisposable
             try
             {
                 var deviceInfo = new SGFPMDeviceInfoParam();
-                fpm.GetDeviceInfo(deviceInfo);
+                var infoError = fpm.GetDeviceInfo(deviceInfo);
+                Trace.TraceInformation(
+                    $"[FingerprintScanner] SCANNER_DEVICE_INFO result={infoError} deviceId={deviceInfo.DeviceID} " +
+                    $"image={deviceInfo.ImageWidth}x{deviceInfo.ImageHeight} dpi={deviceInfo.ImageDPI}");
+                if (infoError != (int)SGFPMError.ERROR_NONE || deviceInfo.ImageWidth <= 0 || deviceInfo.ImageHeight <= 0)
+                {
+                    ScannerDiagnostics.LastFailure = $"GetDeviceInfo unusable result={infoError} {deviceInfo.ImageWidth}x{deviceInfo.ImageHeight}";
+                    return new OpenResult.Error(infoError != 0 ? infoError : -1);
+                }
                 _imageWidth = deviceInfo.ImageWidth;
                 _imageHeight = deviceInfo.ImageHeight;
                 fpm.SetTemplateFormat(SGFPMTemplateFormat.ISO19794);
@@ -180,12 +228,54 @@ public sealed class FingerprintScanner : IDisposable
             }
             catch (Exception e)
             {
+                ScannerDiagnostics.LastFailure = $"reading device info threw {e.GetType().Name}: {e.Message}";
                 Trace.TraceError($"[FingerprintScanner] SCANNER_EXCEPTION reading device info: {e.Message}");
                 return new OpenResult.Error(-1);
             }
 
+            ScannerDiagnostics.LastFailure = null;
             Trace.TraceInformation("[FingerprintScanner] SCANNER_OPEN_SUCCESS");
             return OpenResult.Success.Instance;
+        }
+    }
+
+    private static string ErrorName(int code) =>
+        Enum.IsDefined(typeof(SGFPMError), code) ? ((SGFPMError)code).ToString() : "UNKNOWN";
+
+    private static OpenResult FailSdk(int code, string reason, Exception? e = null)
+    {
+        ScannerDiagnostics.LastFailure = reason;
+        if (e is null) Trace.TraceError($"[FingerprintScanner] SCANNER_SDK_UNAVAILABLE {reason}");
+        else Trace.TraceError($"[FingerprintScanner] SCANNER_SDK_UNAVAILABLE {reason}\n{e}");
+        return new OpenResult.SdkUnavailable(code, reason);
+    }
+
+    /// <summary>Init(DEV_AUTO) failure → the most specific result the SDK's own error code
+    /// supports (previously every non-zero code was reported as "scanner not found").
+    /// DLL/driver-load codes mean the SDK could not start (scanner may be fine); 52/55 are the
+    /// codes meaning no usable device; anything else is surfaced as a generic open Error.</summary>
+    private static OpenResult ClassifyInitFailure(int code)
+    {
+        var reason = $"Init(DEV_AUTO) failed code={code} ({ErrorName(code)})";
+        ScannerDiagnostics.LastFailure = reason;
+        switch (code)
+        {
+            case (int)SGFPMError.ERROR_CREATION_FAILED:
+            case (int)SGFPMError.ERROR_DLLLOAD_FAILED:
+            case (int)SGFPMError.ERROR_DLLLOAD_FAILED_DRV:
+            case (int)SGFPMError.ERROR_DLLLOAD_FAILED_ALGO:
+            case (int)SGFPMError.ERROR_DLLLOAD_FAILED_WSQ:
+            case (int)SGFPMError.ERROR_SYSLOAD_FAILED:
+            case (int)SGFPMError.ERROR_DRVLOAD_FAILED:
+                Trace.TraceError($"[FingerprintScanner] SCANNER_SDK_UNAVAILABLE {reason}");
+                return new OpenResult.SdkUnavailable(code, reason);
+            case (int)SGFPMError.ERROR_DEVICE_NOT_FOUND:
+            case (int)SGFPMError.ERROR_INITIALIZE_FAILED:
+                Trace.TraceWarning($"[FingerprintScanner] SCANNER_INIT_FAILED {reason}");
+                return OpenResult.DeviceNotFound.Instance;
+            default:
+                Trace.TraceWarning($"[FingerprintScanner] SCANNER_INIT_FAILED {reason}");
+                return new OpenResult.Error(code);
         }
     }
 

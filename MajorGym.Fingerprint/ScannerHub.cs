@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using SecuGen.FDxSDKPro.Windows;
 
 namespace MajorGym.Fingerprint;
 
@@ -31,8 +30,8 @@ namespace MajorGym.Fingerprint;
 ///      scanner for enrollment.
 ///   2. PERIODIC POLL (a low-frequency safety net for the rarer case where nothing happens
 ///      to be actively capturing at the exact moment of a real detach): a background timer
-///      calls SGFingerPrintManager.EnumerateDevice() every few seconds and force-releases
-///      if the count of attached SecuGen devices drops to zero. This is intentionally
+///      checks the OS USB device list (SecuGen VID, no SDK object) every few seconds and
+///      force-releases if no SecuGen device is present any more. This is intentionally
 ///      infrequent (not a tight poll loop) — Stage 2 brief §10 explicitly warns against
 ///      "unnecessary reopen cycles"; this only ever CLOSES an already-dead session, it
 ///      never proactively reopens one (reopening only happens the next time a consumer
@@ -71,6 +70,7 @@ public sealed class ScannerHub : IDisposable
             {
                 // Don't leave a half-open instance sitting around — the next
                 // EnsureOpenAsync() call should start completely clean.
+                Trace.TraceWarning($"[ScannerHub] SCANNER_HUB_INIT_FAILED result={result.GetType().Name} detail={ScannerDiagnostics.LastFailure ?? "(none)"}");
                 try { fresh.Close(); } catch { /* best-effort */ }
             }
             return result;
@@ -103,10 +103,15 @@ public sealed class ScannerHub : IDisposable
         }
     }
 
+    private readonly object _timerLock = new();
+
     private void EnsureDetachPollStarted()
     {
-        if (_detachPollTimer is not null) return;
-        _detachPollTimer = new Timer(_ => PollForDetach(), null, DetachPollInterval, DetachPollInterval);
+        lock (_timerLock)
+        {
+            if (_detachPollTimer is not null) return;
+            _detachPollTimer = new Timer(_ => PollForDetach(), null, DetachPollInterval, DetachPollInterval);
+        }
     }
 
     private void PollForDetach()
@@ -115,26 +120,27 @@ public sealed class ScannerHub : IDisposable
         // has nothing to detect detachment for (Stage 2 brief §10: "do not introduce
         // unnecessary reopen cycles" — this extends to "unnecessary poll work" too).
         if (_scanner is null) return;
-        try
+
+        // OS-level device-list check (SecuGen VID), exactly like Android's
+        // isScannerConnected — it creates NO SGFingerPrintManager. The previous implementation
+        // built a second SDK object here every few seconds, which (a) put a second SDK
+        // connection next to the persistent one, and (b) could report zero devices for a
+        // scanner the persistent connection already had open, force-releasing a healthy session.
+        // null = the OS query itself failed: unknown, never treated as "detached".
+        if (UsbScannerPresence.TryDetect() == false)
         {
-            using var probe = new SGFingerPrintManager();
-            var count = 0;
-            probe.EnumerateDevice();
-            count = probe.NumberOfDevice;
-            if (count == 0)
-            {
-                Trace.TraceWarning("[ScannerHub] SCANNER_HUB_DETACHED (poll) — releasing session; next attach starts a clean one");
-                _ = ForceReleaseAsync();
-            }
+            Trace.TraceWarning("[ScannerHub] SCANNER_HUB_DETACHED (poll) — no SecuGen USB device present; releasing session, next attach starts a clean one");
+            _ = ForceReleaseAsync();
         }
-        catch
-        {
-            // A probe failure here is not itself conclusive evidence of detachment
-            // (could be a transient SDK hiccup); leave the decision to the next poll
-            // tick or to a reactive ReportOperationError call, exactly as Android
-            // tolerates isolated SDK errors without treating each one as fatal
-            // (Stage 1 report §4.3 error-tolerance discussion).
-        }
+    }
+
+    /// <summary>Drops the persistent session so the next <see cref="EnsureOpenAsync"/> starts a
+    /// completely clean Init/OpenDevice. Windows stand-in for Android's detach-broadcast release,
+    /// used by the kiosk loop when capture keeps failing (no detach event exists on Windows).</summary>
+    public Task ReleaseSessionAsync(string reason)
+    {
+        Trace.TraceWarning($"[ScannerHub] SCANNER_HUB_RELEASE_REQUESTED reason={reason}");
+        return ForceReleaseAsync();
     }
 
     private async Task ForceReleaseAsync()

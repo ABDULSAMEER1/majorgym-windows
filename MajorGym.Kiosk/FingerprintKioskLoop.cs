@@ -2,7 +2,6 @@ using System.Diagnostics;
 using MajorGym.Data;
 using MajorGym.Data.Entities;
 using MajorGym.Fingerprint;
-using SecuGen.FDxSDKPro.Windows;
 
 namespace MajorGym.Kiosk;
 
@@ -71,7 +70,17 @@ public sealed class FingerprintKioskLoop
     private readonly MembershipAudioPlayer _audioPlayer;
     private readonly string _audioAssetsDirectory;
 
+    // Android parity: KioskOverlay's coordinator re-checks every SERVICE_RETRY_MS (3000) and
+    // calls requestStart when a scanner is connected (and not paused for enrollment).
+    private const int ServiceRetryMs = 3000;
+    // When the SDK itself could not start (missing/mismatched DLL, driver module) retrying every
+    // 3 s cannot help and just repeats Init; back off until something has had time to change.
+    private const int SdkUnavailableRetryMs = 30_000;
+
     private readonly SemaphoreSlim _lifecycleLock = new(1, 1); // Android: scannerLifecycleMutex
+    private volatile bool _paused;            // Android: the coordinator's `paused` flag (enrollment owns the scanner)
+    private volatile bool _lastOpenSdkUnavailable;
+    private int _retryMonitorStarted;
     private CancellationTokenSource? _cts;
     private Task? _loopTask;
 
@@ -100,9 +109,49 @@ public sealed class FingerprintKioskLoop
     /// class doc).</summary>
     public void RequestStart()
     {
-        if (_loopTask is { IsCompleted: false }) return; // already trying/listening
-        _cts = new CancellationTokenSource();
-        _loopTask = Task.Run(() => RunLoopAsync(_cts.Token));
+        _paused = false; // explicit start/resume (app launch, or enrollment handing the scanner back)
+        StartLoopIfIdle();
+    }
+
+    private void StartLoopIfIdle()
+    {
+        lock (_startLock)
+        {
+            if (_loopTask is { IsCompleted: false }) return; // already trying/listening
+            _cts = new CancellationTokenSource();
+            var token = _cts.Token;
+            _loopTask = Task.Run(() => RunLoopAsync(token));
+        }
+    }
+
+    private readonly object _startLock = new();
+
+    /// <summary>Android parity with the coordinator's retry tick (KioskOverlay.kt): every
+    /// <see cref="ServiceRetryMs"/>, if the kiosk is not paused for enrollment and a SecuGen
+    /// scanner is present on USB, make sure the loop is running. This is what recovers the
+    /// kiosk when the scanner is plugged in after launch, replugged, or a previous open failed —
+    /// without it, a failed first open at startup was never retried. Call once at startup.</summary>
+    public void StartRetryMonitor()
+    {
+        if (Interlocked.Exchange(ref _retryMonitorStarted, 1) == 1) return;
+        _ = Task.Run(async () =>
+        {
+            while (true)
+            {
+                var delay = _lastOpenSdkUnavailable ? SdkUnavailableRetryMs : ServiceRetryMs;
+                try { await Task.Delay(delay).ConfigureAwait(false); } catch { return; }
+                try
+                {
+                    if (_paused) continue;                                   // enrollment has the scanner
+                    if (_loopTask is { IsCompleted: false }) continue;       // already trying/listening
+                    if (IsScannerConnected()) StartLoopIfIdle();
+                }
+                catch (Exception e)
+                {
+                    Trace.TraceError($"[FingerprintKioskLoop] retry monitor tick failed: {e.Message}");
+                }
+            }
+        });
     }
 
     /// <summary>Used while another consumer (enrollment) needs exclusive scanner access.
@@ -111,9 +160,15 @@ public sealed class FingerprintKioskLoop
     /// <c>stopListeningAndSelf</c>'s <c>cancelAndJoin</c>.</summary>
     public async Task RequestStopAsync()
     {
-        var cts = _cts;
-        var task = _loopTask;
-        _loopTask = null;
+        _paused = true; // set BEFORE cancelling so the retry monitor cannot restart the loop mid-handoff
+        CancellationTokenSource? cts;
+        Task? task;
+        lock (_startLock)
+        {
+            cts = _cts;
+            task = _loopTask;
+            _loopTask = null;
+        }
         Bus.Publish(null);
         if (cts is null || task is null) return;
 
@@ -122,26 +177,13 @@ public sealed class FingerprintKioskLoop
         _audioPlayer.Stop();
     }
 
-    /// <summary>Windows adaptation of Android's cheap "is anything worth trying" USB
-    /// vendor-ID check (Stage 1 report §4.2/§4.3, isScannerConnected). There is no
-    /// side-effect-free Windows equivalent that avoids touching the SDK entirely, so this
-    /// creates a short-lived probe manager purely to call EnumerateDevice() — cheap and
-    /// side-effect-free from the CALLER's perspective (no persistent handle kept open),
-    /// even though it does briefly touch the SDK, unlike Android's pure OS-device-list
-    /// read. Documented adaptation, not a silent behavior change.</summary>
-    public static bool IsScannerConnected()
-    {
-        try
-        {
-            using var probe = new SGFingerPrintManager();
-            probe.EnumerateDevice();
-            return probe.NumberOfDevice > 0;
-        }
-        catch
-        {
-            return false;
-        }
-    }
+    /// <summary>Windows port of Android's cheap, side-effect-free "is anything worth trying"
+    /// USB vendor-ID check (Stage 1 report §4.2/§4.3, isScannerConnected): reads the OS device
+    /// list for a SecuGen VID and creates NO SDK object. (An earlier version built a throw-away
+    /// SGFingerPrintManager here, which is a second SDK connection beside ScannerHub's.) If the
+    /// OS query itself fails the answer is unknown, and "worth trying" is returned so a failed
+    /// probe can never keep the kiosk from starting.</summary>
+    public static bool IsScannerConnected() => UsbScannerPresence.TryDetect() ?? true;
 
     private async Task RunLoopAsync(CancellationToken token)
     {
@@ -150,10 +192,11 @@ public sealed class FingerprintKioskLoop
         {
             Trace.TraceInformation("[FingerprintKioskLoop] SCANNER_ENSURE_OPEN background loop");
             var openResult = await _scannerHub.EnsureOpenAsync();
+            _lastOpenSdkUnavailable = openResult is FingerprintScanner.OpenResult.SdkUnavailable;
             var fp = _scannerHub.Current;
             if (openResult is not FingerprintScanner.OpenResult.Success || fp is null)
             {
-                Trace.TraceWarning($"[FingerprintKioskLoop] SCANNER_OPEN_FAILED background loop result={openResult.GetType().Name}");
+                Trace.TraceWarning($"[FingerprintKioskLoop] SCANNER_OPEN_FAILED background loop result={openResult.GetType().Name} detail={ScannerDiagnostics.LastFailure ?? "(none)"}");
                 return;
             }
 
@@ -249,6 +292,12 @@ public sealed class FingerprintKioskLoop
                             if (consecutiveErrors >= MaxConsecutiveCaptureErrors)
                             {
                                 Trace.TraceWarning($"[FingerprintKioskLoop] SCANNER_CAPTURE_FAILED giving up after {consecutiveErrors} consecutive errors, stopping");
+                                // Android relies on ACTION_USB_DEVICE_DETACHED to drop the dead
+                                // session; Windows has no such event, so after a genuine run of
+                                // failures drop it here — otherwise ScannerHub.EnsureOpenAsync would
+                                // keep returning the stale session forever and the retry monitor
+                                // could never recover the kiosk.
+                                await _scannerHub.ReleaseSessionAsync($"{consecutiveErrors} consecutive capture errors");
                                 goto loopEnd;
                             }
                             await Task.Delay(CaptureErrorRetryDelayMs, token).ConfigureAwait(false);

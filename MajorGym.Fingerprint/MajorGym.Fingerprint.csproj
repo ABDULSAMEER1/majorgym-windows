@@ -36,23 +36,23 @@
     §4.2). If Bluetooth support is ever required, these two native DLLs would need adding
     here — do not add them speculatively now.
   -->
-  <ItemGroup>
-    <None Include="..\vendor\SecuGen\x64\sgfplib.dll" Condition="'$(Platform)' != 'x86'">
+  <!--
+    Phase 1 detection fix: the three explicit native-DLL items are now one wildcard per
+    architecture ("sg*.dll" never matches the managed "SecuGen.FDxSDKPro.*.dll"). Today it copies
+    exactly the same three files; its purpose is that any device-specific SecuGen driver module
+    (sgfduNN*.dll — sgfplib.dll loads these at Init time, see ScannerDiagnostics preflight log)
+    dropped into vendor\SecuGen\<arch>\ from the SDK's own bin folder is deployed beside the
+    executable automatically, instead of needing another project edit.
+  -->
+  <ItemGroup Condition="'$(Platform)' != 'x86'">
+    <None Include="..\vendor\SecuGen\x64\sg*.dll">
+      <Link>%(Filename)%(Extension)</Link>
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
-    <None Include="..\vendor\SecuGen\x64\sgfpamx.dll" Condition="'$(Platform)' != 'x86'">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-    </None>
-    <None Include="..\vendor\SecuGen\x64\sgwsqlib.dll" Condition="'$(Platform)' != 'x86'">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-    </None>
-    <None Include="..\vendor\SecuGen\x86\sgfplib.dll" Condition="'$(Platform)' == 'x86'">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-    </None>
-    <None Include="..\vendor\SecuGen\x86\sgfpamx.dll" Condition="'$(Platform)' == 'x86'">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-    </None>
-    <None Include="..\vendor\SecuGen\x86\sgwsqlib.dll" Condition="'$(Platform)' == 'x86'">
+  </ItemGroup>
+  <ItemGroup Condition="'$(Platform)' == 'x86'">
+    <None Include="..\vendor\SecuGen\x86\sg*.dll">
+      <Link>%(Filename)%(Extension)</Link>
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
   </ItemGroup>
