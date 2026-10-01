@@ -41,8 +41,22 @@ public sealed class NavigationViewModel : INotifyPropertyChanged
     public Screen Current
     {
         get => _current;
-        private set { _current = value; OnPropertyChanged(); }
+        private set { _current = value; OnPropertyChanged(); OnPropertyChanged(nameof(SelectedNav)); }
     }
+
+    /// <summary>Which bottom-navigation item is lit for the current screen — Android's
+    /// <c>BottomNav</c> "highlighted" rule: an item is lit only on its own screen, except that a
+    /// member's Attendance Details page (AttendanceHistory) keeps Attendance lit. The Add item is
+    /// never lit (Android: <c>active = !isAdd &amp;&amp; screen == highlighted</c>). Purely visual — it
+    /// never affects what tapping an item does.</summary>
+    public string SelectedNav => _current switch
+    {
+        Screen.Dashboard => "Dashboard",
+        Screen.AttendanceLogs or Screen.AttendanceHistory => "Attendance",
+        Screen.Backup => "Backup",
+        Screen.Sync => "Sync",
+        _ => ""
+    };
 
     /// <summary>The active screen's ViewModel. Phase 1 change: this is now built ONCE per
     /// navigation inside <see cref="NavigateTo"/> and cached, instead of being a computed
@@ -100,7 +114,10 @@ public sealed class NavigationViewModel : INotifyPropertyChanged
         Screen.ExpiredArchive => new ViewModels.ExpiredArchiveViewModel(_repository, this),
         Screen.ArchivedMemberDetail amd => new ViewModels.ArchivedMemberDetailViewModel(_repository, this, _repository.GetArchivedMemberById(amd.MemberId)!),
 
-        _ => new ViewModels.DashboardViewModel(_repository, this) // Sync: not implemented in this project — never a blank screen
+        // ---- Device Sync (LAN sync with Android phones / other PCs) ----
+        Screen.Sync => new ViewModels.SyncViewModel(App.SyncPrefs, App.SyncManager),
+
+        _ => new ViewModels.DashboardViewModel(_repository, this) // defensive default — never a blank screen
     };
 
     /// <summary>Only ever called for a screen <see cref="Resolve"/> has already confirmed has

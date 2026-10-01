@@ -3,6 +3,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:vm="clr-namespace:MajorGym.App.ViewModels"
         xmlns:views="clr-namespace:MajorGym.App.Views"
+        xmlns:ctl="clr-namespace:MajorGym.App.Controls"
         Title="Major Gym" Height="800" Width="420"
         Background="{StaticResource GymBg}">
     <!--
@@ -33,6 +34,8 @@
         <DataTemplate DataType="{x:Type vm:EnrollFingerprintViewModel}"><views:EnrollFingerprintView/></DataTemplate>
         <DataTemplate DataType="{x:Type vm:ExpiredArchiveViewModel}"><views:ExpiredArchiveView/></DataTemplate>
         <DataTemplate DataType="{x:Type vm:ArchivedMemberDetailViewModel}"><views:ArchivedMemberDetailView/></DataTemplate>
+        <!-- Device Sync -->
+        <DataTemplate DataType="{x:Type vm:SyncViewModel}"><views:SyncView/></DataTemplate>
     </Window.Resources>
 
     <Grid>
@@ -43,20 +46,74 @@
 
         <ContentControl Grid.Row="0" Content="{Binding CurrentViewModel}"/>
 
-        <!-- Major Gym primary navigation: Dashboard / Attendance / Add / Backup / Sync.
-             Add is a first-class navigation action (not only a Dashboard shortcut), matching
-             the final Windows navigation requirement. Sync remains visibly present but disabled
-             until the LAN transport implementation is completed; it must not navigate to a
-             fake/blank screen. -->
-        <Border Grid.Row="1" Background="{StaticResource GymSurface}" BorderBrush="{StaticResource GymBorder}" BorderThickness="0,1,0,0">
-            <UniformGrid Columns="5" Height="72">
-                <Button Content="Dashboard" Click="NavDashboard_Click" Background="Transparent" BorderThickness="0" Foreground="{StaticResource GymText}"/>
-                <Button Content="Attendance" Click="NavAttendance_Click" Background="Transparent" BorderThickness="0" Foreground="{StaticResource GymText}"/>
-                <Button Content="Add" Click="NavAdd_Click" Background="Transparent" BorderThickness="0" Foreground="{StaticResource GymText}"/>
-                <Button Content="Backup" Click="NavBackup_Click" Background="Transparent" BorderThickness="0" Foreground="{StaticResource GymText}"/>
-                <Button Content="Sync" Background="Transparent" BorderThickness="0" Foreground="{StaticResource GymTextFaint}" IsEnabled="False"/>
+        <!-- Major Gym primary navigation — Windows port of Android's BottomNav dock:
+             Dashboard | Attendance | Add | Backup | Sync (five equal slots, Add exactly centred with
+             the raised, ringed circular button drawn over the dock's arch). Members is NOT a
+             bottom-nav item (reachable via Dashboard -> Total Members, as on Android). Every item
+             navigates through NavigationViewModel.NavigateTo. Dock height = 26 arch + 62 bar. -->
+        <Grid Grid.Row="1" Height="88">
+            <ctl:BottomDock/>
+
+            <UniformGrid Columns="5" Margin="0,26,0,0" Height="62" VerticalAlignment="Top">
+                <Button Style="{StaticResource GymNavItem}" Tag="Dashboard" Click="NavDashboard_Click" AutomationProperties.Name="Dashboard"
+                        ctl:NavItem.IsActive="{Binding SelectedNav, Mode=OneWay, Converter={StaticResource StringEquals}, ConverterParameter=Dashboard}">
+                    <TextBlock Text="&#xE80F;" FontFamily="{StaticResource GymIconFont}" FontSize="22"/>
+                </Button>
+                <Button Style="{StaticResource GymNavItem}" Tag="Attendance" Click="NavAttendance_Click" AutomationProperties.Name="Attendance"
+                        ctl:NavItem.IsActive="{Binding SelectedNav, Mode=OneWay, Converter={StaticResource StringEquals}, ConverterParameter=Attendance}">
+                    <TextBlock Text="&#xE902;" FontFamily="{StaticResource GymIconFont}" FontSize="22"/>
+                </Button>
+                <!-- Add slot: reserves the icon row so the "Add" label lines up; the ring button below is the visible icon -->
+                <Button Style="{StaticResource GymNavItem}" Tag="Add" Click="NavAdd_Click" AutomationProperties.Name="Add">
+                    <Border Width="24" Height="24"/>
+                </Button>
+                <Button Style="{StaticResource GymNavItem}" Tag="Backup" Click="NavBackup_Click" AutomationProperties.Name="Backup"
+                        ctl:NavItem.IsActive="{Binding SelectedNav, Mode=OneWay, Converter={StaticResource StringEquals}, ConverterParameter=Backup}">
+                    <!-- Material "Storage" glyph (three stacked drives) -->
+                    <Viewbox Width="22" Height="22">
+                        <Canvas Width="24" Height="24">
+                            <Path Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType=ContentControl}}"
+                                  Data="M2,20 H22 V14 H2 Z M6,18.5 A1.1,1.1 0 1 1 6,16.3 A1.1,1.1 0 0 1 6,18.5 Z
+                                        M2,4 V10 H22 V4 Z M6,8.7 A1.1,1.1 0 1 1 6,6.5 A1.1,1.1 0 0 1 6,8.7 Z
+                                        M2,11 H22 V13 H2 Z" FillRule="EvenOdd"/>
+                        </Canvas>
+                    </Viewbox>
+                </Button>
+                <Button Style="{StaticResource GymNavItem}" Tag="Sync" Click="NavSync_Click" AutomationProperties.Name="Sync"
+                        ctl:NavItem.IsActive="{Binding SelectedNav, Mode=OneWay, Converter={StaticResource StringEquals}, ConverterParameter=Sync}">
+                    <TextBlock Text="&#xE895;" FontFamily="{StaticResource GymIconFont}" FontSize="22"/>
+                </Button>
             </UniformGrid>
-        </Border>
+
+            <!-- Raised, ringed Add button centred in the arch — same destination (Screen.Add) as the Add slot beneath it -->
+            <Button Width="62" Height="62" HorizontalAlignment="Center" VerticalAlignment="Top" Margin="0,1,0,0"
+                    Click="NavAdd_Click" Cursor="Hand" Focusable="False" AutomationProperties.Name="Add member">
+                <Button.Effect><DropShadowEffect Color="#FF2F8BFF" BlurRadius="18" ShadowDepth="0" Opacity="0.55"/></Button.Effect>
+                <Button.Template>
+                    <ControlTemplate TargetType="Button">
+                        <Grid>
+                            <Ellipse Fill="#FF060E26">
+                                <Ellipse.Stroke>
+                                    <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
+                                        <GradientStop Color="#FF5CC8FF" Offset="0"/><GradientStop Color="#FF3B5BFF" Offset="1"/>
+                                    </LinearGradientBrush>
+                                </Ellipse.Stroke>
+                                <Ellipse.StrokeThickness>1.5</Ellipse.StrokeThickness>
+                            </Ellipse>
+                            <Ellipse Width="48" Height="48">
+                                <Ellipse.Fill>
+                                    <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
+                                        <GradientStop Color="#FF58AEFF" Offset="0"/><GradientStop Color="#FF2563EB" Offset="1"/>
+                                    </LinearGradientBrush>
+                                </Ellipse.Fill>
+                            </Ellipse>
+                            <TextBlock Text="&#xE8FA;" FontFamily="{StaticResource GymIconFont}" FontSize="22" Foreground="White"
+                                       HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Grid>
+                    </ControlTemplate>
+                </Button.Template>
+            </Button>
+        </Grid>
 
         <!--
             Kiosk overlay — layered on top of BOTH rows above via Grid.RowSpan="2", so it can
@@ -67,7 +124,7 @@
             Found" no-match case (brief §6): a recognized scan is never shown here at all.
         -->
         <Border Grid.Row="0" Grid.RowSpan="2" VerticalAlignment="Bottom" HorizontalAlignment="Stretch"
-                Margin="16,0,16,80" Padding="16,12" CornerRadius="12" Background="{StaticResource GymDanger}"
+                Margin="16,0,16,96" Padding="16,12" CornerRadius="12" Background="{StaticResource GymDanger}"
                 Visibility="{Binding KioskOverlay.IsVisible, Converter={StaticResource BoolToVis}}" IsHitTestVisible="False">
             <TextBlock Text="{Binding KioskOverlay.Message}" Foreground="White" FontWeight="SemiBold" HorizontalAlignment="Center"/>
         </Border>

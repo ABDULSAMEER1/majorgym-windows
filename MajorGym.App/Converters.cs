@@ -76,3 +76,14 @@ public sealed class MoneyConverter : IValueConverter
     public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture) =>
         throw new NotSupportedException();
 }
+
+/// <summary>value.ToString() == ConverterParameter — used by the bottom navigation to light the
+/// item whose key matches <c>NavigationViewModel.SelectedNav</c>.</summary>
+public sealed class StringEqualsConverter : IValueConverter
+{
+    public object Convert(object? value, Type targetType, object parameter, CultureInfo culture) =>
+        string.Equals(value?.ToString(), parameter?.ToString(), StringComparison.Ordinal);
+
+    public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture) =>
+        throw new NotSupportedException();
+}

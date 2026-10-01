@@ -22,4 +22,7 @@ public partial class MainWindow : Window
 
     private void NavBackup_Click(object sender, RoutedEventArgs e) =>
         App.Nav.NavigateTo(new Screen.Backup());
+
+    private void NavSync_Click(object sender, RoutedEventArgs e) =>
+        App.Nav.NavigateTo(new Screen.Sync());
 }

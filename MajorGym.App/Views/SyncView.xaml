@@ -1,0 +1,173 @@
+<UserControl x:Class="MajorGym.App.Views.SyncView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:ctl="clr-namespace:MajorGym.App.Controls">
+    <!-- Mirrors Android SyncScreen (SyncScreen.kt): DEVICE SYNC header with the relocated Dashboard
+         number-visibility gear + privacy eye, "This Device" card, "Sync Circle Code" card, Sync Now
+         button + status line, Paired Devices list, and the Dashboard Number Visibility dialog. -->
+    <Grid Background="{StaticResource GymBg}">
+        <ScrollViewer VerticalScrollBarVisibility="Auto">
+            <StackPanel Margin="16,20,16,24">
+
+                <!-- Header: title + gear (only while privacy mode is off) + eye -->
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Grid.Column="0" Text="DEVICE SYNC" Style="{StaticResource GymHeaderText}" FontSize="22"/>
+                    <Button Grid.Column="1" Command="{Binding OpenCardSettingsCommand}" Width="40" Height="40" Background="Transparent" BorderThickness="0"
+                            Cursor="Hand" ToolTip="Dashboard number visibility settings"
+                            Visibility="{Binding ShowGear, Converter={StaticResource BoolToVis}}">
+                        <Button.Template>
+                            <ControlTemplate TargetType="Button">
+                                <Border Background="Transparent">
+                                    <TextBlock Text="&#xE713;" FontFamily="{StaticResource GymIconFont}" FontSize="20"
+                                               Foreground="{StaticResource GymTextMuted}" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                </Border>
+                            </ControlTemplate>
+                        </Button.Template>
+                    </Button>
+                    <Button Grid.Column="2" Command="{Binding ToggleMasterPrivacyCommand}" Width="40" Height="40" Background="Transparent" BorderThickness="0" Cursor="Hand">
+                        <Button.Template>
+                            <ControlTemplate TargetType="Button">
+                                <Grid Background="Transparent">
+                                    <TextBlock x:Name="Eye" Text="&#xE7B3;" FontFamily="{StaticResource GymIconFont}" FontSize="20"
+                                               Foreground="{StaticResource GymTextMuted}" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                    <!-- Visibility-off glyph: the eye with a diagonal strike, shown while privacy mode is ON -->
+                                    <Line x:Name="Strike" X1="10" Y1="30" X2="30" Y2="10" Stroke="{StaticResource GymAccent}" StrokeThickness="2"
+                                          StrokeStartLineCap="Round" StrokeEndLineCap="Round" Visibility="Collapsed"/>
+                                </Grid>
+                                <ControlTemplate.Triggers>
+                                    <DataTrigger Binding="{Binding MasterPrivacyOn}" Value="True">
+                                        <Setter TargetName="Eye" Property="Foreground" Value="{StaticResource GymAccent}"/>
+                                        <Setter TargetName="Strike" Property="Visibility" Value="Visible"/>
+                                    </DataTrigger>
+                                </ControlTemplate.Triggers>
+                            </ControlTemplate>
+                        </Button.Template>
+                        <Button.ToolTip>
+                            <ToolTip Content="Toggle Dashboard privacy mode"/>
+                        </Button.ToolTip>
+                    </Button>
+                </Grid>
+                <Border Height="20"/>
+
+                <!-- This Device -->
+                <Border Style="{StaticResource GymCard}">
+                    <StackPanel>
+                        <TextBlock Text="This Device" Foreground="{StaticResource GymText}" FontWeight="Bold"/>
+                        <Border Height="10"/>
+                        <TextBlock Text="DEVICE NAME" Style="{StaticResource GymFieldLabel}"/>
+                        <TextBox Text="{Binding DeviceName, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource GymTextBox}"/>
+                    </StackPanel>
+                </Border>
+                <Border Height="14"/>
+
+                <!-- Sync Circle Code -->
+                <Border Style="{StaticResource GymCard}">
+                    <StackPanel>
+                        <TextBlock Text="Sync Circle Code" Foreground="{StaticResource GymText}" FontWeight="Bold"/>
+                        <Border Height="10"/>
+                        <TextBlock Text="SYNC CODE" Style="{StaticResource GymFieldLabel}"/>
+                        <TextBox Text="{Binding CodeInput, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource GymTextBox}"
+                                 MaxLength="8" CharacterCasing="Upper" ctl:InputGuard.Mode="AsciiLettersAndDigits"/>
+                        <Border Height="10"/>
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/><ColumnDefinition Width="8"/><ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <Button Grid.Column="0" Content="Generate New" Command="{Binding GenerateNewCommand}" Style="{StaticResource GymSecondaryButton44}"/>
+                            <Button Grid.Column="2" Content="Save Code" Command="{Binding SaveCodeCommand}" Style="{StaticResource GymPrimaryButton44}"
+                                    FontFamily="{StaticResource GymHeaderFontBold}"/>
+                        </Grid>
+                    </StackPanel>
+                </Border>
+                <Border Height="14"/>
+
+                <!-- Sync Now (gradient + glow when idle, Surface3 + spinner while syncing) -->
+                <Button Command="{Binding SyncNowCommand}" Style="{StaticResource GymPrimaryButtonLarge}" Height="50">
+                    <Grid>
+                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Center"
+                                    Visibility="{Binding IsNotSyncing, Converter={StaticResource BoolToVis}}">
+                            <TextBlock Text="&#xE895;" FontFamily="{StaticResource GymIconFont}" FontSize="18" Foreground="#FF06121A" VerticalAlignment="Center"/>
+                            <TextBlock Text="Sync Now" Margin="8,0,0,0" FontSize="15" FontWeight="Bold" Foreground="#FF06121A"
+                                       FontFamily="{StaticResource GymHeaderFontBold}" VerticalAlignment="Center"/>
+                        </StackPanel>
+                        <Path Width="20" Height="20" Stretch="Uniform" Stroke="{StaticResource GymTextMuted}" StrokeThickness="2.2"
+                              StrokeStartLineCap="Round" StrokeEndLineCap="Round" Data="M10,2 A8,8 0 1 1 2,10"
+                              RenderTransformOrigin="0.5,0.5" HorizontalAlignment="Center" VerticalAlignment="Center"
+                              Visibility="{Binding IsSyncing, Converter={StaticResource BoolToVis}}">
+                            <Path.RenderTransform><RotateTransform x:Name="Spin"/></Path.RenderTransform>
+                            <Path.Triggers>
+                                <EventTrigger RoutedEvent="FrameworkElement.Loaded">
+                                    <BeginStoryboard>
+                                        <Storyboard>
+                                            <DoubleAnimation Storyboard.TargetName="Spin" Storyboard.TargetProperty="Angle"
+                                                             From="0" To="360" Duration="0:0:0.9" RepeatBehavior="Forever"/>
+                                        </Storyboard>
+                                    </BeginStoryboard>
+                                </EventTrigger>
+                            </Path.Triggers>
+                        </Path>
+                    </Grid>
+                </Button>
+
+                <!-- Live status / result line (12sp muted) -->
+                <TextBlock Text="{Binding Status}" Foreground="{StaticResource GymTextMuted}" FontSize="12" TextWrapping="Wrap" Margin="0,12,0,0"
+                           Visibility="{Binding HasStatus, Converter={StaticResource BoolToVis}}"/>
+
+                <!-- Paired Devices -->
+                <TextBlock Text="{Binding PairedHeader}" Style="{StaticResource GymSectionLabel}" Margin="0,20,0,8"/>
+                <StackPanel Visibility="{Binding HasNoPaired, Converter={StaticResource BoolToVis}}" HorizontalAlignment="Center" Margin="0,16,0,0">
+                    <TextBlock Text="&#xE895;" FontFamily="{StaticResource GymIconFont}" FontSize="28" Foreground="{StaticResource GymTextFaint}" HorizontalAlignment="Center"/>
+                    <TextBlock Text="No other devices synced yet." Foreground="{StaticResource GymTextFaint}" FontSize="13" Margin="0,8,0,0" HorizontalAlignment="Center"/>
+                </StackPanel>
+                <ItemsControl ItemsSource="{Binding Paired}" Visibility="{Binding HasPaired, Converter={StaticResource BoolToVis}}">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <Border Background="{StaticResource GymSurfaceCard}" BorderBrush="{StaticResource GymBorder}" BorderThickness="1"
+                                    CornerRadius="12" Padding="12" Margin="0,0,0,8">
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Grid.Column="0" Orientation="Horizontal">
+                                        <Ellipse Width="8" Height="8" Fill="{StaticResource GymSuccess}" VerticalAlignment="Center"/>
+                                        <TextBlock Text="{Binding Name}" Foreground="{StaticResource GymText}" FontSize="13" FontWeight="Medium"
+                                                   Margin="8,0,0,0" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
+                                    </StackPanel>
+                                    <TextBlock Grid.Column="1" Text="{Binding LastSyncedText}" Foreground="{StaticResource GymTextMuted}" FontSize="11"
+                                               VerticalAlignment="Center" Margin="8,0,0,0"/>
+                                </Grid>
+                            </Border>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </StackPanel>
+        </ScrollViewer>
+
+        <!-- "Dashboard Number Visibility" AlertDialog (relocated from the Dashboard header, as on Android) -->
+        <Grid Background="{StaticResource GymScrim}" Visibility="{Binding ShowCardSettings, Converter={StaticResource BoolToVis}}">
+            <Border Background="{StaticResource GymSurfaceCard}" CornerRadius="24" Padding="24" MaxWidth="340" HorizontalAlignment="Center" VerticalAlignment="Center" Margin="24">
+                <StackPanel>
+                    <TextBlock Text="Dashboard Number Visibility" Foreground="{StaticResource GymText}" FontSize="20" FontWeight="Bold" TextWrapping="Wrap"/>
+                    <TextBlock Text="Each card's number can be shown or hidden independently. The card itself always stays visible and tappable."
+                               Foreground="{StaticResource GymTextFaint}" FontSize="12" TextWrapping="Wrap" Margin="0,12,0,8"/>
+                    <Grid Margin="0,6"><TextBlock Text="Total Members" Foreground="{StaticResource GymText}" FontSize="14" VerticalAlignment="Center"/>
+                        <CheckBox IsChecked="{Binding TotalVisible, Mode=TwoWay}" Style="{StaticResource GymSwitch}" HorizontalAlignment="Right"/></Grid>
+                    <Grid Margin="0,6"><TextBlock Text="Active Members" Foreground="{StaticResource GymText}" FontSize="14" VerticalAlignment="Center"/>
+                        <CheckBox IsChecked="{Binding ActiveVisible, Mode=TwoWay}" Style="{StaticResource GymSwitch}" HorizontalAlignment="Right"/></Grid>
+                    <Grid Margin="0,6"><TextBlock Text="Expiring Soon" Foreground="{StaticResource GymText}" FontSize="14" VerticalAlignment="Center"/>
+                        <CheckBox IsChecked="{Binding ExpiringVisible, Mode=TwoWay}" Style="{StaticResource GymSwitch}" HorizontalAlignment="Right"/></Grid>
+                    <Grid Margin="0,6"><TextBlock Text="Expired Members" Foreground="{StaticResource GymText}" FontSize="14" VerticalAlignment="Center"/>
+                        <CheckBox IsChecked="{Binding ExpiredVisible, Mode=TwoWay}" Style="{StaticResource GymSwitch}" HorizontalAlignment="Right"/></Grid>
+                    <Grid Margin="0,6"><TextBlock Text="Due Members" Foreground="{StaticResource GymText}" FontSize="14" VerticalAlignment="Center"/>
+                        <CheckBox IsChecked="{Binding DueVisible, Mode=TwoWay}" Style="{StaticResource GymSwitch}" HorizontalAlignment="Right"/></Grid>
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,16,0,0">
+                        <Button Content="Done" Command="{Binding CloseCardSettingsCommand}" Style="{StaticResource GymTextButton}" Foreground="{StaticResource GymAccent}"/>
+                    </StackPanel>
+                </StackPanel>
+            </Border>
+        </Grid>
+    </Grid>
+</UserControl>

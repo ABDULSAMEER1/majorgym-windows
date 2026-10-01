@@ -1,3 +1,4 @@
+using System.Text.Json.Nodes;
 using Microsoft.Data.Sqlite;
 using MajorGym.Data.Entities;
 
@@ -780,6 +781,407 @@ public sealed class Repository
         {
             _changeLogLock.Release();
         }
+    }
+
+    // ---------------- Device Sync (port of Android Repository "Device Sync" section) ----------------
+    //
+    // Replicates the change log itself (add/update/delete events, each with a stable id, origin
+    // device and sequence number) instead of comparing whole Member snapshots. SyncManager calls
+    // LocalVersionVector / ChangesMissingForPeer / ApplyRemoteChanges (and Backfill at the start of
+    // every attempt) and nothing else. All logic below is a direct port of the Android originals so
+    // a Windows PC and an Android phone replay the same history to the same merged state.
+
+    /// <summary>The highest <see cref="SyncChangeLogEntry.Seq"/> this device has ever recorded or
+    /// learned about, per origin device — what this device tells a sync peer it already has.
+    /// (Android: <c>localVersionVector</c>.)</summary>
+    public Dictionary<string, long> LocalVersionVector()
+    {
+        _changeLogLock.Wait();
+        try
+        {
+            var result = new Dictionary<string, long>();
+            using var cmd = _db.Connection.CreateCommand();
+            cmd.CommandText = "SELECT originDeviceId, MAX(seq) FROM sync_change_log GROUP BY originDeviceId";
+            using var r = cmd.ExecuteReader();
+            while (r.Read()) result[r.GetString(0)] = r.GetInt64(1);
+            return result;
+        }
+        finally { _changeLogLock.Release(); }
+    }
+
+    /// <summary>Every locally-known change a peer with <paramref name="peerVector"/> doesn't have
+    /// yet — regardless of which device originally made it (gossip: changes learned secondhand are
+    /// forwarded too). (Android: <c>changesMissingForPeer</c>.)</summary>
+    public List<SyncChangeLogEntry> ChangesMissingForPeer(IReadOnlyDictionary<string, long> peerVector)
+    {
+        _changeLogLock.Wait();
+        try
+        {
+            var result = new List<SyncChangeLogEntry>();
+            using var cmd = _db.Connection.CreateCommand();
+            cmd.CommandText = "SELECT changeId, entityType, recordId, operation, originDeviceId, seq, timestampMillis, fieldsJson FROM sync_change_log";
+            using var r = cmd.ExecuteReader();
+            while (r.Read())
+            {
+                var origin = r.GetString(4);
+                var seq = r.GetInt64(5);
+                if (seq <= (peerVector.TryGetValue(origin, out var have) ? have : 0L)) continue;
+                result.Add(ReadChangeLog(r));
+            }
+            return result;
+        }
+        finally { _changeLogLock.Release(); }
+    }
+
+    /// <summary>Gives every Member / AttendanceRecord / ArchivedMember that predates the change-log
+    /// system (or arrived via backup restore without history) a synthetic initial ADD entry under
+    /// THIS device's id, so it becomes an ordinary syncable record. Idempotent; gated by
+    /// <see cref="MajorGym.Data.Settings.SyncPrefs.HasBackfilledSyncHistory"/>. (Android:
+    /// <c>backfillPreSyncHistoryIfNeeded</c>.)</summary>
+    public void BackfillPreSyncHistoryIfNeeded(MajorGym.Data.Settings.SyncPrefs syncPrefs)
+    {
+        if (syncPrefs.HasBackfilledSyncHistory) return;
+        _changeLogLock.Wait();
+        try
+        {
+            using var tx = _db.Connection.BeginTransaction();
+            var seq = MaxSeqFor(_deviceId, tx);
+
+            var missingMemberIds = IdsMissingAddHistory(
+                "SELECT m.id FROM members m WHERE NOT EXISTS (SELECT 1 FROM sync_change_log s WHERE s.entityType = 'MEMBER' AND s.operation = 'ADD' AND s.recordId = m.id)", tx);
+            foreach (var id in missingMemberIds)
+            {
+                var m = GetByIdOnceNoLock(id, tx);
+                if (m is null) continue;
+                seq++;
+                var ts = m.UpdatedAtMillis > 0 ? m.UpdatedAtMillis
+                       : m.CreatedAtMillis > 0 ? m.CreatedAtMillis
+                       : DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+                InsertChangeLogWithSeq(new SyncChangeLogEntry
+                {
+                    ChangeId = Guid.NewGuid().ToString(),
+                    EntityType = SyncEntityType.Member,
+                    RecordId = m.Id,
+                    Operation = SyncOperation.Add,
+                    OriginDeviceId = _deviceId,
+                    Seq = seq,
+                    TimestampMillis = ts,
+                    FieldsJson = SyncChangeCodec.EncodeMember(m).ToJsonString()
+                }, tx);
+            }
+
+            var missingAttendanceIds = IdsMissingAddHistory(
+                "SELECT a.globalId FROM attendance_records a WHERE NOT EXISTS (SELECT 1 FROM sync_change_log s WHERE s.entityType = 'ATTENDANCE' AND s.operation = 'ADD' AND s.recordId = a.globalId)", tx);
+            foreach (var globalId in missingAttendanceIds)
+            {
+                AttendanceRecord? a = null;
+                using (var sel = _db.Connection.CreateCommand())
+                {
+                    sel.Transaction = tx;
+                    sel.CommandText = "SELECT * FROM attendance_records WHERE globalId = $g";
+                    sel.Parameters.AddWithValue("$g", globalId);
+                    using var r = sel.ExecuteReader();
+                    if (r.Read()) a = ReadAttendance(r);
+                }
+                if (a is null) continue;
+                seq++;
+                var fields = new JsonObject
+                {
+                    ["memberId"] = a.MemberId,
+                    ["timestampMillis"] = a.TimestampMillis,
+                    ["dayEpoch"] = a.DayEpoch,
+                    ["session"] = a.Session
+                };
+                InsertChangeLogWithSeq(new SyncChangeLogEntry
+                {
+                    ChangeId = Guid.NewGuid().ToString(),
+                    EntityType = SyncEntityType.Attendance,
+                    RecordId = globalId,
+                    Operation = SyncOperation.Add,
+                    OriginDeviceId = _deviceId,
+                    Seq = seq,
+                    TimestampMillis = a.TimestampMillis,
+                    FieldsJson = fields.ToJsonString()
+                }, tx);
+            }
+
+            var missingArchivedIds = IdsMissingAddHistory(
+                "SELECT am.originalMemberId FROM archived_members am WHERE NOT EXISTS (SELECT 1 FROM sync_change_log s WHERE s.entityType = 'ARCHIVED_MEMBER' AND s.operation = 'ADD' AND s.recordId = am.originalMemberId)", tx);
+            foreach (var id in missingArchivedIds)
+            {
+                ArchivedMember? a = null;
+                using (var sel = _db.Connection.CreateCommand())
+                {
+                    sel.Transaction = tx;
+                    sel.CommandText = "SELECT * FROM archived_members WHERE originalMemberId = $id";
+                    sel.Parameters.AddWithValue("$id", id);
+                    using var r = sel.ExecuteReader();
+                    if (r.Read()) a = ReadArchivedMember(r);
+                }
+                if (a is null) continue;
+                seq++;
+                InsertChangeLogWithSeq(new SyncChangeLogEntry
+                {
+                    ChangeId = Guid.NewGuid().ToString(),
+                    EntityType = SyncEntityType.ArchivedMember,
+                    RecordId = a.OriginalMemberId,
+                    Operation = SyncOperation.Add,
+                    OriginDeviceId = _deviceId,
+                    Seq = seq,
+                    TimestampMillis = a.ArchivedAtMillis,
+                    FieldsJson = SyncChangeCodec.EncodeArchivedMember(a).ToJsonString()
+                }, tx);
+            }
+
+            tx.Commit();
+            syncPrefs.HasBackfilledSyncHistory = true;
+        }
+        finally { _changeLogLock.Release(); }
+    }
+
+    /// <summary>Applies a batch of change-log entries received from a sync peer: stores each into
+    /// the local log (a duplicate changeId is silently ignored — the idempotency the protocol
+    /// requires), then recomputes and re-applies the merged state of every record any NEW entry
+    /// touched. Returns how many entries were genuinely new. (Android: <c>applyRemoteChanges</c>.)</summary>
+    public int ApplyRemoteChanges(IReadOnlyList<SyncChangeLogEntry> entries, PhotoStore photoStore)
+    {
+        if (entries.Count == 0) return 0;
+        _changeLogLock.Wait();
+        try
+        {
+            using var tx = _db.Connection.BeginTransaction();
+            var newlyInserted = new List<SyncChangeLogEntry>();
+            foreach (var e in entries)
+            {
+                if (InsertChangeLogWithSeq(e, tx)) newlyInserted.Add(e);
+            }
+
+            var affectedMembers = newlyInserted.Where(e => e.EntityType == SyncEntityType.Member).Select(e => e.RecordId).ToHashSet();
+            var affectedAttendance = newlyInserted.Where(e => e.EntityType == SyncEntityType.Attendance).Select(e => e.RecordId).ToHashSet();
+            var affectedArchived = newlyInserted.Where(e => e.EntityType == SyncEntityType.ArchivedMember).Select(e => e.RecordId).ToHashSet();
+
+            foreach (var id in affectedMembers) RecomputeAndApplyMember(id, photoStore, tx);
+            foreach (var id in affectedAttendance) RecomputeAndApplyAttendance(id, tx);
+            foreach (var id in affectedArchived) RecomputeAndApplyArchivedMember(id, tx);
+
+            tx.Commit();
+            return newlyInserted.Count;
+        }
+        finally { _changeLogLock.Release(); }
+    }
+
+    /// <summary>Replays a Member's ENTIRE known history (oldest first: timestamp, then originDeviceId,
+    /// then seq) — the LAST ADD-or-DELETE decides whether the member exists; only UPDATEs after that
+    /// lifecycle event are folded in, oldest-to-newest, so per-field last-writer-wins while untouched
+    /// fields are preserved. Identical rule to Android's <c>recomputeAndApplyMember</c>.</summary>
+    private void RecomputeAndApplyMember(string recordId, PhotoStore photoStore, SqliteTransaction tx)
+    {
+        var entries = GetChangeLogForRecord(SyncEntityType.Member, recordId, tx);
+        if (entries.Count == 0) return;
+
+        var lastLifecycleIndex = entries.FindLastIndex(e => e.Operation == SyncOperation.Add || e.Operation == SyncOperation.Delete);
+        if (lastLifecycleIndex == -1) return;
+        var lastLifecycleEntry = entries[lastLifecycleIndex];
+
+        if (lastLifecycleEntry.Operation == SyncOperation.Delete)
+        {
+            if (GetByIdOnceNoLock(recordId, tx) is not null)
+            {
+                photoStore.DeletePhoto(recordId);
+                photoStore.DeleteIdProofPhoto(recordId);
+                using var del = _db.Connection.CreateCommand();
+                del.Transaction = tx;
+                del.CommandText = "DELETE FROM members WHERE id = $id";
+                del.Parameters.AddWithValue("$id", recordId);
+                del.ExecuteNonQuery();
+            }
+            return;
+        }
+
+        var merged = ParseObject(lastLifecycleEntry.FieldsJson);
+        var sameLifecycleUpdates = entries.Skip(lastLifecycleIndex + 1).Where(e => e.Operation == SyncOperation.Update).ToList();
+        foreach (var u in sameLifecycleUpdates)
+        {
+            if (u.FieldsJson is null) continue;
+            var changed = ParseObject(u.FieldsJson);
+            foreach (var kv in changed.ToList()) merged[kv.Key] = kv.Value?.DeepClone();
+        }
+        var latestTimestamp = Math.Max(
+            lastLifecycleEntry.TimestampMillis,
+            sameLifecycleUpdates.Count > 0 ? sameLifecycleUpdates.Max(e => e.TimestampMillis) : lastLifecycleEntry.TimestampMillis);
+
+        var member = SyncChangeCodec.DecodeMemberFields(recordId, merged, latestTimestamp, photoStore);
+        if (member is null) return;
+        try
+        {
+            Upsert(EncryptedForStorage(member), tx);
+        }
+        catch (SqliteException)
+        {
+            // e.g. a genuine phone-number collision between two members independently added on
+            // different devices — a data-entry conflict for the owner to resolve by hand; it must
+            // not abort the whole sync (Android logs and continues the same way). The change
+            // itself stays in the log, so it is never silently lost.
+        }
+    }
+
+    /// <summary>Attendance: a DELETE anywhere in the history wins; otherwise the ADD is applied via an
+    /// idempotent INSERT OR IGNORE. (Android: <c>recomputeAndApplyAttendance</c>.)</summary>
+    private void RecomputeAndApplyAttendance(string globalId, SqliteTransaction tx)
+    {
+        var entries = GetChangeLogForRecord(SyncEntityType.Attendance, globalId, tx);
+        if (entries.Count == 0) return;
+        if (entries.Any(e => e.Operation == SyncOperation.Delete))
+        {
+            using var del = _db.Connection.CreateCommand();
+            del.Transaction = tx;
+            del.CommandText = "DELETE FROM attendance_records WHERE globalId = $g";
+            del.Parameters.AddWithValue("$g", globalId);
+            del.ExecuteNonQuery();
+            return;
+        }
+        var addEntry = entries.FirstOrDefault(e => e.Operation == SyncOperation.Add);
+        if (addEntry?.FieldsJson is null) return;
+        var f = ParseObject(addEntry.FieldsJson);
+        var memberId = (string?)f["memberId"] ?? "";
+        if (string.IsNullOrWhiteSpace(memberId)) return;
+        var timestampMillis = (long?)f["timestampMillis"] ?? addEntry.TimestampMillis;
+        var dayEpoch = f["dayEpoch"] is not null
+            ? (long)f["dayEpoch"]!
+            : DateUtils.ToMillis(DateUtils.ToLocalDate(timestampMillis));
+        var sessionRaw = (string?)f["session"];
+        var session = string.IsNullOrWhiteSpace(sessionRaw) ? AttendanceSessionExtensions.SessionOf(timestampMillis).ToString() : sessionRaw;
+
+        using var ins = _db.Connection.CreateCommand();
+        ins.Transaction = tx;
+        ins.CommandText = """
+            INSERT OR IGNORE INTO attendance_records (memberId, timestampMillis, dayEpoch, session, globalId)
+            VALUES ($memberId, $timestampMillis, $dayEpoch, $session, $globalId)
+            """;
+        ins.Parameters.AddWithValue("$memberId", memberId);
+        ins.Parameters.AddWithValue("$timestampMillis", timestampMillis);
+        ins.Parameters.AddWithValue("$dayEpoch", dayEpoch);
+        ins.Parameters.AddWithValue("$session", session);
+        ins.Parameters.AddWithValue("$globalId", globalId);
+        ins.ExecuteNonQuery();
+    }
+
+    /// <summary>Archived-member replay: the chronologically LAST ADD-or-DELETE decides whether the
+    /// archive row exists. Touches ONLY archived_members — a received archive can never re-activate a
+    /// member. (Android: <c>recomputeAndApplyArchivedMember</c>.)</summary>
+    private void RecomputeAndApplyArchivedMember(string recordId, SqliteTransaction tx)
+    {
+        var entries = GetChangeLogForRecord(SyncEntityType.ArchivedMember, recordId, tx);
+        if (entries.Count == 0) return;
+        var lastLifecycleIndex = entries.FindLastIndex(e => e.Operation == SyncOperation.Add || e.Operation == SyncOperation.Delete);
+        if (lastLifecycleIndex == -1) return;
+        var lastLifecycleEntry = entries[lastLifecycleIndex];
+
+        using (var del = _db.Connection.CreateCommand())
+        {
+            del.Transaction = tx;
+            del.CommandText = "DELETE FROM archived_members WHERE originalMemberId = $id";
+            del.Parameters.AddWithValue("$id", recordId);
+            del.ExecuteNonQuery();
+        }
+        if (lastLifecycleEntry.Operation == SyncOperation.Delete || lastLifecycleEntry.FieldsJson is null) return;
+
+        var archived = SyncChangeCodec.DecodeArchivedMemberFields(recordId, ParseObject(lastLifecycleEntry.FieldsJson));
+        if (archived is null) return;
+        using var ins = _db.Connection.CreateCommand();
+        ins.Transaction = tx;
+        ins.CommandText = """
+            INSERT OR IGNORE INTO archived_members
+                (originalMemberId, name, phone, joinedMillis, lastPlan, lastFee, lastStartMillis, lastExpiryMillis, idProof, archivedAtMillis)
+            VALUES
+                ($originalMemberId, $name, $phone, $joinedMillis, $lastPlan, $lastFee, $lastStartMillis, $lastExpiryMillis, $idProof, $archivedAtMillis)
+            """;
+        ins.Parameters.AddWithValue("$originalMemberId", archived.OriginalMemberId);
+        ins.Parameters.AddWithValue("$name", archived.Name);
+        ins.Parameters.AddWithValue("$phone", archived.Phone);
+        ins.Parameters.AddWithValue("$joinedMillis", archived.JoinedMillis);
+        ins.Parameters.AddWithValue("$lastPlan", archived.LastPlan);
+        ins.Parameters.AddWithValue("$lastFee", archived.LastFee);
+        ins.Parameters.AddWithValue("$lastStartMillis", archived.LastStartMillis);
+        ins.Parameters.AddWithValue("$lastExpiryMillis", archived.LastExpiryMillis);
+        ins.Parameters.AddWithValue("$idProof", archived.IdProof);
+        ins.Parameters.AddWithValue("$archivedAtMillis", archived.ArchivedAtMillis);
+        ins.ExecuteNonQuery();
+    }
+
+    // ---- sync helpers ----
+
+    private static JsonObject ParseObject(string? json)
+    {
+        try { return JsonNode.Parse(string.IsNullOrWhiteSpace(json) ? "{}" : json) as JsonObject ?? new JsonObject(); }
+        catch { return new JsonObject(); }
+    }
+
+    private long MaxSeqFor(string deviceId, SqliteTransaction tx) => NextSeqNoLock(deviceId, tx) - 1;
+
+    private List<string> IdsMissingAddHistory(string sql, SqliteTransaction tx)
+    {
+        var ids = new List<string>();
+        using var cmd = _db.Connection.CreateCommand();
+        cmd.Transaction = tx;
+        cmd.CommandText = sql;
+        using var r = cmd.ExecuteReader();
+        while (r.Read()) ids.Add(r.GetString(0));
+        return ids;
+    }
+
+    /// <summary>Same ordering rule as Android's <c>SyncChangeLogDao.getForRecord</c>: timestamp first,
+    /// (originDeviceId, seq) as a deterministic tiebreak every device resolves identically.</summary>
+    private List<SyncChangeLogEntry> GetChangeLogForRecord(string entityType, string recordId, SqliteTransaction tx)
+    {
+        var result = new List<SyncChangeLogEntry>();
+        using var cmd = _db.Connection.CreateCommand();
+        cmd.Transaction = tx;
+        cmd.CommandText = """
+            SELECT changeId, entityType, recordId, operation, originDeviceId, seq, timestampMillis, fieldsJson
+            FROM sync_change_log WHERE entityType = $t AND recordId = $id
+            ORDER BY timestampMillis ASC, originDeviceId ASC, seq ASC
+            """;
+        cmd.Parameters.AddWithValue("$t", entityType);
+        cmd.Parameters.AddWithValue("$id", recordId);
+        using var r = cmd.ExecuteReader();
+        while (r.Read()) result.Add(ReadChangeLog(r));
+        return result;
+    }
+
+    private static SyncChangeLogEntry ReadChangeLog(SqliteDataReader r) => new()
+    {
+        ChangeId = r.GetString(0),
+        EntityType = r.GetString(1),
+        RecordId = r.GetString(2),
+        Operation = r.GetString(3),
+        OriginDeviceId = r.GetString(4),
+        Seq = r.GetInt64(5),
+        TimestampMillis = r.GetInt64(6),
+        FieldsJson = r.IsDBNull(7) ? null : r.GetString(7)
+    };
+
+    /// <summary>INSERT OR IGNORE of an entry with its own (already-assigned) seq. Returns true only if
+    /// a row was actually inserted (false = duplicate changeId or duplicate (originDeviceId, seq)).</summary>
+    private bool InsertChangeLogWithSeq(SyncChangeLogEntry entry, SqliteTransaction tx)
+    {
+        using var cmd = _db.Connection.CreateCommand();
+        cmd.Transaction = tx;
+        cmd.CommandText = """
+            INSERT OR IGNORE INTO sync_change_log
+                (changeId, entityType, recordId, operation, originDeviceId, seq, timestampMillis, fieldsJson)
+            VALUES
+                ($changeId, $entityType, $recordId, $operation, $originDeviceId, $seq, $timestampMillis, $fieldsJson)
+            """;
+        cmd.Parameters.AddWithValue("$changeId", entry.ChangeId);
+        cmd.Parameters.AddWithValue("$entityType", entry.EntityType);
+        cmd.Parameters.AddWithValue("$recordId", entry.RecordId);
+        cmd.Parameters.AddWithValue("$operation", entry.Operation);
+        cmd.Parameters.AddWithValue("$originDeviceId", entry.OriginDeviceId);
+        cmd.Parameters.AddWithValue("$seq", entry.Seq);
+        cmd.Parameters.AddWithValue("$timestampMillis", entry.TimestampMillis);
+        cmd.Parameters.AddWithValue("$fieldsJson", (object?)entry.FieldsJson ?? DBNull.Value);
+        return cmd.ExecuteNonQuery() == 1;
     }
 
     // ---------------- Internal helpers ----------------

@@ -25,6 +25,7 @@ public partial class App : System.Windows.Application
     public static ScannerOwnership ScannerOwnership { get; private set; } = null!;
     public static FingerprintKioskLoop KioskLoop { get; private set; } = null!;
     public static SyncPrefs SyncPrefs { get; private set; } = null!;
+    public static SyncManager SyncManager { get; private set; } = null!;
     public static Navigation.NavigationViewModel Nav { get; private set; } = null!;
 
     /// <summary>%LOCALAPPDATA%\MajorGym — the Windows equivalent root of Android's private
@@ -52,6 +53,9 @@ public partial class App : System.Windows.Application
         SyncPrefs = new SyncPrefs(AppDataDirectory);
         Repository = new Repository(Database, SyncPrefs.DeviceId);
         PhotoStore = new PhotoStore(AppDataDirectory);
+        // LAN Device Sync transport (port of Android's SyncManager). Database work it triggers is
+        // marshalled onto this (UI) thread — the single shared SQLite connection lives here.
+        SyncManager = new SyncManager(Repository, SyncPrefs, PhotoStore, new WpfDbThread());
 
         ScannerHub = new ScannerHub();
         ScannerOwnership = new ScannerOwnership();
