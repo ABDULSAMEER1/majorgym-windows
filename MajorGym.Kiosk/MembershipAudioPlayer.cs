@@ -65,13 +65,28 @@ public sealed class MembershipAudioPlayer
         _ => throw new ArgumentOutOfRangeException(nameof(status))
     };
 
-    public void Play(string audioAssetsDirectory, MembershipAudioStatus status)
+    /// <summary>WPF <see cref="MediaPlayer"/> is a DispatcherObject: it must be created and driven on the UI
+    /// thread. The kiosk loop calls in from a thread-pool thread, where the player never pumped its events
+    /// (clips could fail to play or to be released). Marshal onto the UI dispatcher, non-blocking.</summary>
+    private static void RunOnUi(Action action)
+    {
+        var dispatcher = System.Windows.Application.Current?.Dispatcher;
+        if (dispatcher is null || dispatcher.CheckAccess()) { action(); return; }
+        dispatcher.BeginInvoke(action);
+    }
+
+    public void Play(string audioAssetsDirectory, MembershipAudioStatus status) =>
+        RunOnUi(() => PlayCore(audioAssetsDirectory, status));
+
+    public void Stop() => RunOnUi(StopCore);
+
+    private void PlayCore(string audioAssetsDirectory, MembershipAudioStatus status)
     {
         try
         {
             lock (_lock)
             {
-                Stop(); // Stop/release whatever was already playing so clips never overlap.
+                StopCore(); // Stop/release whatever was already playing so clips never overlap.
 
                 var path = Path.Combine(audioAssetsDirectory, ClipFileName(status));
                 if (!File.Exists(path))
@@ -95,7 +110,7 @@ public sealed class MembershipAudioPlayer
         }
     }
 
-    public void Stop()
+    private void StopCore()
     {
         lock (_lock)
         {

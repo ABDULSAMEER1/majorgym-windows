@@ -65,6 +65,11 @@ public sealed class FingerprintKioskLoop
     private const int CacheRefreshIntervalMs = 10_000; // see "PLATFORM ADAPTATIONS" above
 
     private readonly Repository _repository;
+    /// <summary>The app's single SQLite connection is owned by the WPF UI thread (see WpfDbThread). Every
+    /// repository call this loop makes goes through here instead of running on a thread-pool thread —
+    /// Microsoft.Data.Sqlite connections are not thread-safe, and concurrent use with the UI used to fail
+    /// the enrolled-members refresh (cache left empty => every scan "Member Not Found") and attendance writes.</summary>
+    private readonly IDbThread _dbThread;
     private readonly ScannerHub _scannerHub;
     private readonly ScannerOwnership _ownership;
     private readonly MembershipAudioPlayer _audioPlayer;
@@ -93,10 +98,11 @@ public sealed class FingerprintKioskLoop
     /// a Windows-notification implementation, per the "PLATFORM ADAPTATIONS" note above.</summary>
     public Action<KioskEvent>? NotifyIfBackgrounded { get; set; }
 
-    public FingerprintKioskLoop(Repository repository, ScannerHub scannerHub, ScannerOwnership ownership,
+    public FingerprintKioskLoop(Repository repository, IDbThread dbThread, ScannerHub scannerHub, ScannerOwnership ownership,
         MembershipAudioPlayer audioPlayer, string audioAssetsDirectory)
     {
         _repository = repository;
+        _dbThread = dbThread;
         _scannerHub = scannerHub;
         _ownership = ownership;
         _audioPlayer = audioPlayer;
@@ -211,7 +217,7 @@ public sealed class FingerprintKioskLoop
 
             try
             {
-                RefreshEnrolledCacheOnce(); // seed the cache before the first capture
+                await RefreshEnrolledCacheOnceAsync().ConfigureAwait(false); // seed the cache before the first capture
 
                 var consecutiveErrors = 0;
                 while (!token.IsCancellationRequested)
@@ -246,15 +252,19 @@ public sealed class FingerprintKioskLoop
                                 // failure here must never crash the kiosk loop or block
                                 // the next scan (Android doc comment, preserved).
                                 var matchedForWrite = matched;
-                                _ = Task.Run(() =>
+                                _ = Task.Run(async () =>
                                 {
                                     try
                                     {
                                         var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
                                         matchedForWrite.LastAttendanceMillis = now;
                                         matchedForWrite.UpdatedAtMillis = now;
-                                        _repository.Save(matchedForWrite);
-                                        _repository.RecordAttendanceVisit(matchedForWrite.Id, now);
+                                        await _dbThread.RunAsync(() =>
+                                        {
+                                            _repository.Save(matchedForWrite);
+                                            _repository.RecordAttendanceVisit(matchedForWrite.Id, now);
+                                            return true;
+                                        }).ConfigureAwait(false);
                                     }
                                     catch (Exception e)
                                     {
@@ -336,14 +346,14 @@ public sealed class FingerprintKioskLoop
         }
     }
 
-    private void RefreshEnrolledCacheOnce()
+    private async Task RefreshEnrolledCacheOnceAsync()
     {
         try
         {
-            _enrolledCache = _repository.GetAll()
+            _enrolledCache = await _dbThread.RunAsync(() => _repository.GetAll()
                 .Where(m => m.FingerprintTemplate is not null)
                 .OrderByDescending(m => m.LastAttendanceMillis ?? 0L)
-                .ToList();
+                .ToList()).ConfigureAwait(false);
         }
         catch (Exception e)
         {
@@ -358,9 +368,20 @@ public sealed class FingerprintKioskLoop
             while (!token.IsCancellationRequested)
             {
                 await Task.Delay(CacheRefreshIntervalMs, token).ConfigureAwait(false);
-                RefreshEnrolledCacheOnce();
+                await RefreshEnrolledCacheOnceAsync().ConfigureAwait(false);
             }
         }
         catch (OperationCanceledException) { /* expected on stop */ }
+    }
+
+    /// <summary>Non-blocking stop for application exit: cancels the loop without awaiting it. Awaiting from the
+    /// UI thread (what OnExit used to do) can deadlock now that the loop's database work is marshalled onto
+    /// that same thread.</summary>
+    public void Shutdown()
+    {
+        _paused = true;
+        CancellationTokenSource? cts;
+        lock (_startLock) { cts = _cts; }
+        try { cts?.Cancel(); } catch (ObjectDisposedException) { }
     }
 }

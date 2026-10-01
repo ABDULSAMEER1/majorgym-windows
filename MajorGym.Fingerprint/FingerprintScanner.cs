@@ -145,12 +145,17 @@ public sealed class FingerprintScanner : IDisposable
             catch (Exception e)
             {
                 _fpm = null;
+                TryDisposeSdkObject(fpm);
                 return FailSdk(0, $"Init(DEV_AUTO) threw {e.GetType().Name}: {e.Message}", e);
             }
             Trace.TraceInformation($"[FingerprintScanner] SCANNER_INIT_RESULT code={initError} ({ErrorName(initError)})");
             if (initError != (int)SGFPMError.ERROR_NONE)
             {
                 _fpm = null;
+                // Release the native object NOW. The retry monitor re-runs Open() every few seconds while a
+                // scanner is plugged in; abandoning each failed SGFingerPrintManager to the GC finalizer
+                // left several half-initialised SDK handles alive against the same USB device.
+                TryDisposeSdkObject(fpm);
                 return ClassifyInitFailure(initError);
             }
             _initialized = true;
@@ -237,6 +242,12 @@ public sealed class FingerprintScanner : IDisposable
             Trace.TraceInformation("[FingerprintScanner] SCANNER_OPEN_SUCCESS");
             return OpenResult.Success.Instance;
         }
+    }
+
+    private static void TryDisposeSdkObject(SGFingerPrintManager fpm)
+    {
+        try { fpm.Dispose(); }
+        catch (Exception e) { Trace.TraceWarning($"[FingerprintScanner] SCANNER_EXCEPTION disposing failed-init SDK object: {e.Message}"); }
     }
 
     private static string ErrorName(int code) =>

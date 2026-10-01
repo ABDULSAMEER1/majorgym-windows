@@ -122,7 +122,8 @@ public sealed class EnrollFingerprintViewModel : INotifyPropertyChanged
             }
 
             StatusText = "Place your finger on the scanner (1 of 2)...";
-            var first = await Task.Run(() => scanner.CaptureTemplate(CaptureTimeoutMs), token);
+            var (first, firstScanner) = await CaptureWithRecoveryAsync(scanner, token);
+            scanner = firstScanner;
             if (!TryGetTemplate(first, scanner, out var firstTemplate, out var firstFailure))
             {
                 Fail(firstFailure!);
@@ -130,7 +131,8 @@ public sealed class EnrollFingerprintViewModel : INotifyPropertyChanged
             }
 
             StatusText = "Lift your finger, then place the SAME finger again (2 of 2)...";
-            var second = await Task.Run(() => scanner.CaptureTemplate(CaptureTimeoutMs), token);
+            var (second, secondScanner) = await CaptureWithRecoveryAsync(scanner, token);
+            scanner = secondScanner;
             if (!TryGetTemplate(second, scanner, out var secondTemplate, out var secondFailure))
             {
                 Fail(secondFailure!);
@@ -214,6 +216,46 @@ public sealed class EnrollFingerprintViewModel : INotifyPropertyChanged
         }
     }
 
+    private const int CaptureSliceMs = 1000;
+
+    /// <summary>Waits up to <see cref="CaptureTimeoutMs"/> for a finger, but in short slices so Cancel (and leaving
+    /// the screen) takes effect within about a second. Previously one 10 s native capture was started and merely
+    /// abandoned on Cancel: it kept running in the background holding the scanner, and silently swallowed the
+    /// next finger placed on it.</summary>
+    private async Task<FingerprintScanner.CaptureResult> CaptureCancellableAsync(FingerprintScanner scanner, CancellationToken token)
+    {
+        var deadline = Environment.TickCount64 + CaptureTimeoutMs;
+        while (true)
+        {
+            token.ThrowIfCancellationRequested();
+            var result = await Task.Run(() => scanner.CaptureTemplate(CaptureSliceMs));
+            if (result is not FingerprintScanner.CaptureResult.Timeout) return result;
+            if (Environment.TickCount64 >= deadline) return result;
+        }
+    }
+
+    /// <summary>One capture, with a single recovery attempt: if the shared session returns a capture error (typically
+    /// a stale session after the scanner was unplugged/replugged — Windows has no detach event, unlike Android's
+    /// broadcast), drop the session, open a clean one and capture once more. Bounded to ONE reopen so it can
+    /// never turn into the repeated Init/Open cycling ScannerHub exists to prevent.</summary>
+    private async Task<(FingerprintScanner.CaptureResult Result, FingerprintScanner Scanner)> CaptureWithRecoveryAsync(
+        FingerprintScanner scanner, CancellationToken token)
+    {
+        var result = await CaptureCancellableAsync(scanner, token);
+        if (result is not FingerprintScanner.CaptureResult.Error err) return (result, scanner);
+
+        Trace.TraceWarning($"[EnrollFingerprintViewModel] capture error code={err.Code}; reopening the scanner session once");
+        StatusText = "Reconnecting to the scanner...";
+        await App.ScannerHub.ReleaseSessionAsync($"enrollment capture error {err.Code}");
+        token.ThrowIfCancellationRequested();
+        var reopen = await OpenWithRetriesAsync();
+        if (reopen is not FingerprintScanner.OpenResult.Success || App.ScannerHub.Current is not { } fresh)
+            return (result, scanner);
+
+        StatusText = "Place your finger on the scanner...";
+        return (await CaptureCancellableAsync(fresh, token), fresh);
+    }
+
     /// <summary>Up to 2 retries with 400ms/800ms backoff (Android parity) specifically for a Busy
     /// Open() result — see class doc comment.</summary>
     private async Task<FingerprintScanner.OpenResult> OpenWithRetriesAsync()
@@ -233,7 +275,7 @@ public sealed class EnrollFingerprintViewModel : INotifyPropertyChanged
     {
         FingerprintScanner.OpenResult.DeviceNotFound => "No fingerprint scanner was found. Please connect the SecuGen Hamster 20 and try again.",
         FingerprintScanner.OpenResult.Busy => "The scanner is busy. Please try again in a moment.",
-        FingerprintScanner.OpenResult.SdkUnavailable => "The fingerprint scanner software could not be started. Please restart the application, or reinstall the SecuGen scanner driver.",
+        FingerprintScanner.OpenResult.SdkUnavailable => "The fingerprint scanner software could not be started. Install the SecuGen FDx SDK Pro / device driver for this PC (and the Microsoft Visual C++ 2015-2022 Redistributable), then restart the app. Details: %LOCALAPPDATA%\\MajorGym\\logs\\scanner.log",
         FingerprintScanner.OpenResult.Error => "The scanner could not be opened. Please try again.",
         _ => "The scanner could not be opened. Please try again."
     };

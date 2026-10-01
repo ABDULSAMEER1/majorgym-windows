@@ -31,7 +31,7 @@ public sealed class KioskOverlayViewModel : INotifyPropertyChanged
             // RequestStopAsync's publish(null) on stop) — always hide on that. A Recognized
             // event is intentionally never rendered here at all (per this class's own doc
             // comment above); only an explicit Recognized == false gets shown.
-            System.Windows.Application.Current?.Dispatcher.Invoke(() => IsVisible = evt is { Recognized: false });
+            System.Windows.Application.Current?.Dispatcher.BeginInvoke((Action)(() => IsVisible = evt is { Recognized: false }));
         };
     }
 

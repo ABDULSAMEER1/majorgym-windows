@@ -60,7 +60,9 @@ public sealed class ScannerHub : IDisposable
 
             Trace.TraceInformation("[ScannerHub] SCANNER_HUB_INIT_START opening the one persistent session");
             var fresh = new FingerprintScanner();
-            var result = fresh.Open();
+            // Init/OpenDevice are blocking native calls that can take seconds. Enrollment calls this from the
+            // WPF UI thread, so run the open on the thread pool instead of freezing the window.
+            var result = await Task.Run(() => fresh.Open()).ConfigureAwait(false);
             if (result is FingerprintScanner.OpenResult.Success)
             {
                 _scanner = fresh;

@@ -67,7 +67,7 @@ public partial class App : System.Windows.Application
         var audioDir = Path.Combine(AppDataDirectory, "Assets", "Audio");
         Directory.CreateDirectory(audioDir);
         Directory.CreateDirectory(Path.GetDirectoryName(StartupVideoPath)!);
-        KioskLoop = new FingerprintKioskLoop(Repository, ScannerHub, ScannerOwnership, new MembershipAudioPlayer(), audioDir);
+        KioskLoop = new FingerprintKioskLoop(Repository, new WpfDbThread(), ScannerHub, ScannerOwnership, new MembershipAudioPlayer(), audioDir);
 
         Nav = new Navigation.NavigationViewModel(Repository, PhotoStore, KioskLoop);
 
@@ -115,8 +115,10 @@ public partial class App : System.Windows.Application
         // force-close the persistent ScannerHub session except as part of process exit
         // itself (Stage 2 brief §10 — only close on shutdown, a genuine detach, or an
         // unrecoverable SDK state).
-        KioskLoop.RequestStopAsync().GetAwaiter().GetResult();
-        ScannerHub.Dispose();
+        // Never block the UI thread on the loop: its database work is marshalled onto this thread, so
+        // awaiting it here could deadlock. Cancel it, then release the scanner on a worker with a bound.
+        KioskLoop.Shutdown();
+        try { Task.Run(() => ScannerHub.Dispose()).Wait(TimeSpan.FromSeconds(5)); } catch { /* exiting anyway */ }
         Database.Dispose();
         base.OnExit(e);
     }
