@@ -2,8 +2,12 @@
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:ctl="clr-namespace:MajorGym.App.Controls">
-    <ScrollViewer Padding="16,20,16,90">
-        <StackPanel>
+    <!-- Spacing is a Margin on the content, not Padding on the ScrollViewer: ScrollViewer.Padding shrinks
+         the visible viewport, so the 90px bottom padding clipped the list ~90px above the bottom
+         navigation and left an empty black band. The dock already sits in its own row below this view;
+         the bottom margin only keeps the last card clear of the dock's raised centre button. -->
+    <ScrollViewer VerticalScrollBarVisibility="Auto">
+        <StackPanel Margin="16,20,16,40">
             <TextBlock Text="MAJOR GYM" Style="{StaticResource GymHeaderText}" Margin="0,0,0,16"/>
 
             <!-- Android: when Dashboard Privacy Mode is ON nothing but the header and this notice renders. -->
