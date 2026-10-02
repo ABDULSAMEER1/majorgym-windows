@@ -144,10 +144,10 @@ public static class SyncChangeCodec
     public static Member? DecodeMemberFields(string recordId, JsonObject fields, long timestampMillis, PhotoStore photoStore,
         string? existingPhotoPath = null)
     {
-        if (fields[KName] is null) return null;
+        if (Js.Str(fields, KName) is null) return null;
 
         string? photoPath = null;
-        var photoB64 = (string?)fields[KPhoto] ?? "";
+        var photoB64 = Js.Str(fields, KPhoto) ?? "";
         if (!string.IsNullOrWhiteSpace(photoB64))
         {
             try { photoPath = photoStore.WriteMemberPhoto(recordId, Convert.FromBase64String(photoB64)); }
@@ -157,7 +157,7 @@ public static class SyncChangeCodec
             photoPath = existingPhotoPath;
 
         var idProofPhotoPath = "";
-        var idPhotoB64 = (string?)fields[KIdPhoto] ?? "";
+        var idPhotoB64 = Js.Str(fields, KIdPhoto) ?? "";
         if (!string.IsNullOrWhiteSpace(idPhotoB64))
         {
             try { idProofPhotoPath = photoStore.WriteIdProofPhoto(recordId, Convert.FromBase64String(idPhotoB64)) ?? ""; }
@@ -165,35 +165,46 @@ public static class SyncChangeCodec
         }
 
         byte[]? fingerprintTemplate = null;
-        var fpB64 = (string?)fields[KFingerprint] ?? "";
+        var fpB64 = Js.Str(fields, KFingerprint) ?? "";
         if (!string.IsNullOrWhiteSpace(fpB64))
         {
             try { fingerprintTemplate = Convert.FromBase64String(fpB64); } catch { /* leave null */ }
         }
 
+        // Lenient reads (Js.*), exactly like Android's optString/optLong/optDouble: a value of an unexpected
+        // JSON type falls back to its default instead of throwing — a throw here used to abort the whole batch.
         return new Member
         {
             Id = recordId,
-            Name = (string?)fields[KName] ?? "",
-            Phone = (string?)fields[KPhone] ?? "",
+            Name = Js.Str(fields, KName) ?? "",
+            Phone = Js.Str(fields, KPhone) ?? "",
             PhotoPath = photoPath,
-            Plan = (string?)fields[KPlan] ?? "",
-            Fee = (double?)fields[KFee] ?? 0.0,
-            JoinedMillis = (long?)fields[KJoined] ?? 0L,
-            ExpiryMillis = (long?)fields[KExpiry] ?? 0L,
-            HistoryJson = fields[KHistory]?.ToJsonString() ?? "[]",
+            Plan = Js.Str(fields, KPlan) ?? "",
+            Fee = Js.Dbl(fields, KFee) ?? 0.0,
+            JoinedMillis = Js.Lng(fields, KJoined) ?? 0L,
+            ExpiryMillis = Js.Lng(fields, KExpiry) ?? 0L,
+            HistoryJson = HistoryText(fields),
             UpdatedAtMillis = timestampMillis,
-            PasswordHash = (string?)fields[KPasswordHash] ?? "",
-            CreatedAtMillis = (long?)fields[KCreated] ?? 0L,
-            LastAttendanceMillis = fields[KLastAttendance] is not null ? (long?)fields[KLastAttendance] : null,
-            Archived = (bool?)fields[KArchived] ?? false,
-            QrToken = (string?)fields[KQrToken] ?? "",
-            QrTokenExpiryMillis = (long?)fields[KQrExpiry] ?? 0L,
-            IdProof = (string?)fields[KIdProof] ?? "",
+            PasswordHash = Js.Str(fields, KPasswordHash) ?? "",
+            CreatedAtMillis = Js.Lng(fields, KCreated) ?? 0L,
+            LastAttendanceMillis = Js.Lng(fields, KLastAttendance),
+            Archived = Js.Bool(fields, KArchived) ?? false,
+            QrToken = Js.Str(fields, KQrToken) ?? "",
+            QrTokenExpiryMillis = Js.Lng(fields, KQrExpiry) ?? 0L,
+            IdProof = Js.Str(fields, KIdProof) ?? "",
             IdProofPhotoPath = idProofPhotoPath,
             FingerprintTemplate = fingerprintTemplate,
-            PendingDeletionMillis = fields[KPendingDeletion] is not null ? (long?)fields[KPendingDeletion] : null
+            PendingDeletionMillis = Js.Lng(fields, KPendingDeletion)
         };
+    }
+
+    /// <summary>The "history" field is a JSON array (Android's <c>JSONArray</c>); tolerate it arriving as an
+    /// already-serialised string, and fall back to an empty history rather than failing the member.</summary>
+    private static string HistoryText(JsonObject fields)
+    {
+        if (!fields.TryGetPropertyValue(KHistory, out var node) || node is null) return "[]";
+        if (node is JsonValue v && v.TryGetValue<string>(out var text)) return string.IsNullOrWhiteSpace(text) ? "[]" : text;
+        return node.ToJsonString();
     }
 
     // ---------- 30-Day Expired Member Archive ----------
@@ -230,19 +241,19 @@ public static class SyncChangeCodec
     /// same one-bad-record-can't-break-sync convention as <see cref="DecodeMemberFields"/>.</summary>
     public static ArchivedMember? DecodeArchivedMemberFields(string recordId, JsonObject fields)
     {
-        if (fields[KaName] is null) return null;
+        if (Js.Str(fields, KaName) is null) return null;
         return new ArchivedMember
         {
             OriginalMemberId = recordId,
-            Name = (string?)fields[KaName] ?? "",
-            Phone = (string?)fields[KaPhone] ?? "",
-            JoinedMillis = (long?)fields[KaJoined] ?? 0L,
-            LastPlan = (string?)fields[KaLastPlan] ?? "",
-            LastFee = (double?)fields[KaLastFee] ?? 0.0,
-            LastStartMillis = (long?)fields[KaLastStart] ?? 0L,
-            LastExpiryMillis = (long?)fields[KaLastExpiry] ?? 0L,
-            IdProof = (string?)fields[KaIdProof] ?? "",
-            ArchivedAtMillis = (long?)fields[KaArchivedAt] ?? 0L
+            Name = Js.Str(fields, KaName) ?? "",
+            Phone = Js.Str(fields, KaPhone) ?? "",
+            JoinedMillis = Js.Lng(fields, KaJoined) ?? 0L,
+            LastPlan = Js.Str(fields, KaLastPlan) ?? "",
+            LastFee = Js.Dbl(fields, KaLastFee) ?? 0.0,
+            LastStartMillis = Js.Lng(fields, KaLastStart) ?? 0L,
+            LastExpiryMillis = Js.Lng(fields, KaLastExpiry) ?? 0L,
+            IdProof = Js.Str(fields, KaIdProof) ?? "",
+            ArchivedAtMillis = Js.Lng(fields, KaArchivedAt) ?? 0L
         };
     }
 
@@ -258,7 +269,7 @@ public static class SyncChangeCodec
     public static Dictionary<string, long> DecodeVersionVector(JsonObject o)
     {
         var m = new Dictionary<string, long>();
-        foreach (var kv in o) m[kv.Key] = (long?)kv.Value ?? 0L;
+        foreach (var kv in o) m[kv.Key] = Js.Lng(o, kv.Key) ?? 0L;
         return m;
     }
 
@@ -294,16 +305,26 @@ public static class SyncChangeCodec
             if (node is not JsonObject o) continue;
             try
             {
+                // Required keys must be present (Android's getString/getLong throw -> entry skipped); the
+                // optional timestamp defaults to 0 like optLong. Js.* also accepts numbers sent as text.
+                var changeId = Js.Str(o, "changeId");
+                var entityType = Js.Str(o, "entityType");
+                var recordId = Js.Str(o, "recordId");
+                var operation = Js.Str(o, "operation");
+                var originDeviceId = Js.Str(o, "originDeviceId");
+                var seq = Js.Lng(o, "seq");
+                if (changeId is null || entityType is null || recordId is null || operation is null
+                    || originDeviceId is null || seq is null) continue;
                 result.Add(new SyncChangeLogEntry
                 {
-                    ChangeId = (string)o["changeId"]!,
-                    EntityType = (string)o["entityType"]!,
-                    RecordId = (string)o["recordId"]!,
-                    Operation = (string)o["operation"]!,
-                    OriginDeviceId = (string)o["originDeviceId"]!,
-                    Seq = (long)o["seq"]!,
-                    TimestampMillis = (long?)o["timestampMillis"] ?? 0L,
-                    FieldsJson = o["fields"]?.ToJsonString()
+                    ChangeId = changeId,
+                    EntityType = entityType,
+                    RecordId = recordId,
+                    Operation = operation,
+                    OriginDeviceId = originDeviceId,
+                    Seq = seq.Value,
+                    TimestampMillis = Js.Lng(o, "timestampMillis") ?? 0L,
+                    FieldsJson = o["fields"] is JsonObject fieldsObj ? fieldsObj.ToJsonString() : null
                 });
             }
             catch

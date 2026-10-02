@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Sockets;
 using System.Security.Cryptography;
@@ -50,8 +51,18 @@ public sealed class SyncManager
     private const int NonceBytes = 32;
     private const int MaxFrameBytes = 64 * 1024 * 1024;
     private const int SocketTimeoutMs = 10_000;
+    /// <summary>Frames are written in slices so the stall timeout applies to "no progress for 10 s", not to the
+    /// whole payload — a multi-megabyte photo batch over a slow Wi-Fi link legitimately takes longer than 10 s.</summary>
+    private const int WriteChunkBytes = 64 * 1024;
+    private const int DialAttemptTimeoutMs = 4_000;
+    private const int DialRetryPauseMs = 700;
+    private const int DialStaggerMs = 250;
+    private const int MaxParallelDialAddresses = 6;
 
     private const string TimedOutMessage = "Timed out waiting for the other phone - try again";
+    private const string CouldNotConnectMessage =
+        "Found the other device but couldn't open a connection to it. Make sure both devices are on the same Wi-Fi or hotspot, " +
+        "and that Windows Firewall allows MajorGym on Private networks (set this network's profile to Private).";
 
     private readonly Repository _repository;
     private readonly SyncPrefs _prefs;
@@ -72,7 +83,10 @@ public sealed class SyncManager
         {
             // Give any pre-existing record that predates the change log a synthetic ADD entry BEFORE
             // this device's version vector is computed (Android: backfillPreSyncHistoryIfNeeded).
-            await _db.RunAsync(() => { _repository.BackfillPreSyncHistoryIfNeeded(_prefs); return 0; }).ConfigureAwait(false);
+            // force: true — Android runs this once and then trusts a flag; on Windows records can also
+            // arrive WITHOUT history later (backup restore), and they would otherwise never reach a
+            // peer. The check only touches records that really lack an ADD entry, so it stays cheap.
+            await _db.RunAsync(() => { _repository.BackfillPreSyncHistoryIfNeeded(_prefs, force: true); return 0; }).ConfigureAwait(false);
             // Windows hardening: re-attach any profile photo whose file is on disk but whose path was
             // lost, so it is logged (and sent) before the version vector below is computed.
             await _db.RunAsync(() => _repository.AdoptOrphanedPhotos(_photoStore)).ConfigureAwait(false);
@@ -117,6 +131,12 @@ public sealed class SyncManager
                     ["name"] = deviceName
                 });
 
+                // Peers this device is responsible for dialing (only the device whose id sorts FIRST dials; the
+                // other side only accepts — prevents the crossed-connections deadlock Android documents).
+                // The handler only records candidates and never blocks mDNS's receive thread; a separate dial
+                // loop (below) keeps retrying them until one connects or the attempt times out.
+                var candidates = new ConcurrentDictionary<string, MdnsPeer>(StringComparer.OrdinalIgnoreCase);
+                var dialFailures = 0;
                 mdns.PeerResolved += peer =>
                 {
                     if (Volatile.Read(ref claimed) == 1) return;
@@ -125,28 +145,43 @@ public sealed class SyncManager
                     if (!string.Equals(peerCodeHash, codeHash, StringComparison.Ordinal)) return;
                     if (peerId is null || peerId == deviceId) return;
                     if (!_prefs.CanAdd(peerId)) return;
-                    // Only the device that sorts first by ID dials out; the other side only accepts.
                     if (string.CompareOrdinal(deviceId, peerId) >= 0) return;
-                    if (Interlocked.CompareExchange(ref claimed, 1, 0) != 0) return;
-                    try
-                    {
-                        var dialed = ConnectToAny(peer);
-                        if (dialed is null) { Interlocked.Exchange(ref claimed, 0); return; }
-                        if (!connected.TrySetResult(dialed)) dialed.Dispose();
-                    }
-                    catch
-                    {
-                        Interlocked.Exchange(ref claimed, 0);
-                    }
+                    candidates[peer.InstanceName] = peer; // newest announcement wins (new session = new port)
                 };
 
                 mdns.Start();
                 onStatus("Looking for authorized devices\u2026");
 
+                _ = Task.Run(async () =>
+                {
+                    try
+                    {
+                        while (!attemptCts.IsCancellationRequested && Volatile.Read(ref claimed) == 0)
+                        {
+                            foreach (var peer in candidates.Values.ToList())
+                            {
+                                if (Volatile.Read(ref claimed) == 1) return;
+                                var dialed = await ConnectToAnyAsync(peer, attemptCts.Token).ConfigureAwait(false);
+                                if (dialed is null) { Interlocked.Increment(ref dialFailures); continue; }
+                                if (Interlocked.CompareExchange(ref claimed, 1, 0) == 0 && connected.TrySetResult(dialed)) return;
+                                dialed.Dispose(); // someone else (an inbound peer) got there first
+                                return;
+                            }
+                            await Task.Delay(DialRetryPauseMs, attemptCts.Token).ConfigureAwait(false);
+                        }
+                    }
+                    catch { /* cancelled / listener torn down — expected when the attempt ends */ }
+                });
+
                 var winner = await Task.WhenAny(connected.Task, Task.Delay(timeoutMs, cancellationToken)).ConfigureAwait(false);
                 if (winner != connected.Task)
                 {
                     cancellationToken.ThrowIfCancellationRequested();
+                    // We found the other device but never managed to open a connection to it: that is a
+                    // reachability problem (almost always Windows Firewall / a "Public" network profile),
+                    // not "no device found" — say so instead of sending the user in the wrong direction.
+                    if (!candidates.IsEmpty && Volatile.Read(ref dialFailures) > 0)
+                        return new SyncOutcome.Error(CouldNotConnectMessage);
                     return new SyncOutcome.NotFound();
                 }
 
@@ -171,20 +206,56 @@ public sealed class SyncManager
         }
     }
 
-    private static TcpClient? ConnectToAny(MdnsPeer peer)
+    /// <summary>Dials every candidate address of <paramref name="peer"/> at (nearly) the same time — best address
+    /// first, the others staggered a few hundred ms behind — and returns the first that connects. A PC
+    /// commonly advertises addresses that are unreachable from here (a second adapter, a VPN); trying them one
+    /// by one at several seconds each used up the whole sync window before the good one was ever tried.</summary>
+    private static async Task<TcpClient?> ConnectToAnyAsync(MdnsPeer peer, CancellationToken cancellationToken)
     {
-        foreach (var address in peer.Addresses)
+        var addresses = peer.Addresses.Where(a => a.AddressFamily == AddressFamily.InterNetwork)
+            .Take(MaxParallelDialAddresses).ToList();
+        if (addresses.Count == 0) return null;
+
+        using var attemptCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        attemptCts.CancelAfter(DialAttemptTimeoutMs + DialStaggerMs * addresses.Count);
+
+        var attempts = new List<(TcpClient Client, Task Task)>();
+        for (var i = 0; i < addresses.Count; i++)
         {
-            var client = new TcpClient(AddressFamily.InterNetwork);
-            try
-            {
-                var connect = client.ConnectAsync(address, peer.Port);
-                if (connect.Wait(4000) && client.Connected) return client;
-            }
-            catch { /* try the next address */ }
-            client.Dispose();
+            var client = new TcpClient(AddressFamily.InterNetwork) { NoDelay = true };
+            attempts.Add((client, ConnectOneAsync(client, addresses[i], peer.Port, i * DialStaggerMs, attemptCts.Token)));
         }
-        return null;
+
+        TcpClient? winner = null;
+        var pending = attempts.Select(a => a.Task).ToList();
+        while (pending.Count > 0 && winner is null)
+        {
+            var done = await Task.WhenAny(pending).ConfigureAwait(false);
+            pending.Remove(done);
+            var entry = attempts.First(a => ReferenceEquals(a.Task, done));
+            if (entry.Client.Connected) winner = entry.Client;
+        }
+
+        attemptCts.Cancel(); // abandon the slower attempts
+        foreach (var (client, _) in attempts)
+        {
+            if (ReferenceEquals(client, winner)) continue;
+            try { client.Dispose(); } catch { }
+        }
+        return winner;
+    }
+
+    /// <summary>Never throws: a failed/cancelled attempt just leaves <c>client.Connected == false</c>.</summary>
+    private static async Task ConnectOneAsync(TcpClient client, IPAddress address, int port, int delayMs, CancellationToken ct)
+    {
+        try
+        {
+            if (delayMs > 0) await Task.Delay(delayMs, ct).ConfigureAwait(false);
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            timeout.CancelAfter(DialAttemptTimeoutMs);
+            await client.ConnectAsync(address, port, timeout.Token).ConfigureAwait(false);
+        }
+        catch (Exception) { /* unreachable / refused / cancelled — the caller checks Connected */ }
     }
 
     private async Task<SyncOutcome> PerformExchangeAsync(TcpClient client, string syncCode, string deviceId, string deviceName)
@@ -221,9 +292,8 @@ public sealed class SyncManager
                     ["deviceName"] = deviceName,
                     ["versionVector"] = SyncChangeCodec.EncodeVersionVector(myVector)
                 };
-                await WriteFrameAsync(stream, CryptoUtils.AesGcmEncrypt(Encoding.UTF8.GetBytes(myIdentity.ToJsonString()), channelKey)).ConfigureAwait(false);
-
-                var identityFrame = await ReadFrameAsync(stream).ConfigureAwait(false);
+                var identityFrame = await ExchangeFrameAsync(stream,
+                    CryptoUtils.AesGcmEncrypt(Encoding.UTF8.GetBytes(myIdentity.ToJsonString()), channelKey)).ConfigureAwait(false);
                 if (identityFrame is null) return new SyncOutcome.Error("Connection closed while exchanging device info");
                 byte[] identityBytes;
                 try { identityBytes = CryptoUtils.AesGcmDecrypt(identityFrame, channelKey); }
@@ -238,9 +308,12 @@ public sealed class SyncManager
                 // --- Send only what the peer is missing. ---
                 var outgoing = await _db.RunAsync(() => _repository.ChangesMissingForPeer(peerVector)).ConfigureAwait(false);
                 var outgoingPayload = new JsonObject { ["changes"] = SyncChangeCodec.EncodeChangeLog(outgoing) };
-                await WriteFrameAsync(stream, CryptoUtils.AesGcmEncrypt(Encoding.UTF8.GetBytes(outgoingPayload.ToJsonString()), channelKey)).ConfigureAwait(false);
-
-                var changesFrame = await ReadFrameAsync(stream).ConfigureAwait(false);
+                // Send and receive AT THE SAME TIME. Both sides write their whole batch before reading the
+                // peer's; with a large photo batch that fills the TCP buffers on both ends, so a strictly
+                // "write, then read" order can leave both writing and neither reading (deadlock). The wire
+                // format is unchanged — an Android peer's sequential write-then-read works with this unchanged.
+                var changesFrame = await ExchangeFrameAsync(stream,
+                    CryptoUtils.AesGcmEncrypt(Encoding.UTF8.GetBytes(outgoingPayload.ToJsonString()), channelKey)).ConfigureAwait(false);
                 if (changesFrame is null) return new SyncOutcome.Error("Connection closed while exchanging records");
                 byte[] changesBytes;
                 try { changesBytes = CryptoUtils.AesGcmDecrypt(changesFrame, channelKey); }
@@ -269,8 +342,36 @@ public sealed class SyncManager
         }
     }
 
+    /// <summary>Writes <paramref name="outgoing"/> while concurrently reading the peer's next frame; returns that
+    /// frame (null = connection closed). A stalled peer surfaces as <see cref="TimeoutException"/>.</summary>
+    private static async Task<byte[]?> ExchangeFrameAsync(NetworkStream stream, byte[] outgoing)
+    {
+        var send = WriteFrameAsync(stream, outgoing);
+        byte[]? incoming;
+        try
+        {
+            incoming = await ReadFrameAsync(stream).ConfigureAwait(false);
+        }
+        catch
+        {
+            try { await send.ConfigureAwait(false); } catch { /* the read failure is the one worth reporting */ }
+            throw;
+        }
+
+        try
+        {
+            await send.ConfigureAwait(false);
+        }
+        catch (TimeoutException) { throw; }
+        catch (Exception) when (incoming is null)
+        {
+            return null; // peer hung up — report it as a closed connection, not a raw socket error
+        }
+        return incoming;
+    }
+
     /// <summary>[4-byte big-endian length][payload]. Same framing as Android's DataOutputStream.writeInt.
-    /// NetworkStream ignores ReadTimeout/WriteTimeout for async calls, so each I/O call carries its own
+    /// NetworkStream ignores ReadTimeout/WriteTimeout for async calls, so each slice carries its own
     /// cancellation token instead; expiry surfaces as <see cref="TimeoutException"/>.</summary>
     private static async Task WriteFrameAsync(NetworkStream stream, byte[] payload)
     {
@@ -279,13 +380,23 @@ public sealed class SyncManager
         header[1] = (byte)(payload.Length >> 16);
         header[2] = (byte)(payload.Length >> 8);
         header[3] = (byte)payload.Length;
-        using var cts = new CancellationTokenSource(SocketTimeoutMs);
-        try
+        await WriteSliceAsync(stream, header, 0, header.Length).ConfigureAwait(false);
+        var offset = 0;
+        while (offset < payload.Length)
         {
-            await stream.WriteAsync(header, cts.Token).ConfigureAwait(false);
-            await stream.WriteAsync(payload, cts.Token).ConfigureAwait(false);
-            await stream.FlushAsync(cts.Token).ConfigureAwait(false);
+            var count = Math.Min(WriteChunkBytes, payload.Length - offset);
+            await WriteSliceAsync(stream, payload, offset, count).ConfigureAwait(false);
+            offset += count;
         }
+        using var cts = new CancellationTokenSource(SocketTimeoutMs);
+        try { await stream.FlushAsync(cts.Token).ConfigureAwait(false); }
+        catch (OperationCanceledException) { throw new TimeoutException(); }
+    }
+
+    private static async Task WriteSliceAsync(NetworkStream stream, byte[] buffer, int offset, int count)
+    {
+        using var cts = new CancellationTokenSource(SocketTimeoutMs);
+        try { await stream.WriteAsync(buffer.AsMemory(offset, count), cts.Token).ConfigureAwait(false); }
         catch (OperationCanceledException) { throw new TimeoutException(); }
     }
 

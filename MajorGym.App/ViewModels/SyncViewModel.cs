@@ -56,7 +56,7 @@ public sealed class SyncViewModel : INotifyPropertyChanged
         _dueVisible = _privacy.IsNumberVisible(DashboardCard.DUE);
 
         GenerateNewCommand = new RelayCommand(GenerateNew, () => !IsSyncing);
-        SaveCodeCommand = new RelayCommand(() => _prefs.SyncCode = _codeInput, () => _codeInput.Length >= 4 && !IsSyncing);
+        SaveCodeCommand = new RelayCommand(() => _prefs.SyncCode = NormalizeCode(_codeInput), () => NormalizeCode(_codeInput).Length >= 4 && !IsSyncing);
         SyncNowCommand = new RelayCommand(StartSync, () => !IsSyncing);
         ToggleMasterPrivacyCommand = new RelayCommand(() => MasterPrivacyOn = !MasterPrivacyOn);
         OpenCardSettingsCommand = new RelayCommand(() => ShowCardSettings = true);
@@ -79,6 +79,12 @@ public sealed class SyncViewModel : INotifyPropertyChanged
 
     public ICommand GenerateNewCommand { get; }
     public ICommand SaveCodeCommand { get; }
+
+    /// <summary>Android's code-field filter: <c>it.uppercase().filter { isLetterOrDigit }.take(8)</c>. The TextBox already
+    /// enforces this while typing; applying it again where the code is saved/used guarantees both devices hash
+    /// byte-identical text even if a value arrives some other way (paste, restored settings).</summary>
+    private static string NormalizeCode(string? raw) =>
+        new string((raw ?? "").ToUpperInvariant().Where(char.IsLetterOrDigit).Take(8).ToArray());
 
     private void GenerateNew()
     {
@@ -108,6 +114,10 @@ public sealed class SyncViewModel : INotifyPropertyChanged
     private async void StartSync()
     {
         if (IsSyncing) return;
+        // A code that was typed but never saved would otherwise be silently ignored in favour of the OLD saved
+        // one — the two devices then advertise different code hashes and never find each other.
+        var typed = NormalizeCode(_codeInput);
+        if (typed.Length >= 4 && typed != NormalizeCode(_prefs.SyncCode)) _prefs.SyncCode = typed;
         IsSyncing = true;
         Status = "Starting sync\u2026";
         var dispatcher = Application.Current.Dispatcher;
@@ -128,7 +138,7 @@ public sealed class SyncViewModel : INotifyPropertyChanged
         {
             SyncOutcome.Success s => $"Synced with {s.PeerName} \u2014 {s.RecordCount} record(s) merged.",
             SyncOutcome.NoCodeSet => "Set a sync code first.",
-            SyncOutcome.NotFound => "No authorized device found. Make sure all phones are on the same Wi-Fi or hotspot, have the same sync code, and have this Sync screen open.",
+            SyncOutcome.NotFound => "No authorized device found. Make sure all phones are on the same Wi-Fi or hotspot, have the same sync code, and have this Sync screen open. If Windows Firewall asked for permission, allow MajorGym on Private networks.",
             SyncOutcome.Error e => $"Sync failed: {e.Message}",
             _ => "Sync failed"
         };

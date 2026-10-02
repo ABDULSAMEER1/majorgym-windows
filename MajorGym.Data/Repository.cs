@@ -246,9 +246,6 @@ public sealed class Repository
         _changeLogLock.Wait();
         try
         {
-            photoStore.DeletePhoto(member.Id);
-            photoStore.DeleteIdProofPhoto(member.Id);
-
             using var tx = _db.Connection.BeginTransaction();
 
             using (var del = _db.Connection.CreateCommand())
@@ -306,6 +303,10 @@ public sealed class Repository
             }, tx);
 
             tx.Commit();
+            // Files go only once the transaction has committed (Android's archive path does the same): a failed
+            // commit must not leave a member whose photos are already gone.
+            photoStore.DeletePhoto(member.Id);
+            photoStore.DeleteIdProofPhoto(member.Id);
         }
         finally
         {
@@ -483,13 +484,24 @@ public sealed class Repository
             _changeLogLock.Wait();
             try
             {
-                photoStore.DeletePhoto(m.Id);
-                photoStore.DeleteIdProofPhoto(m.Id);
-
                 using var tx = _db.Connection.BeginTransaction();
 
-                using (var ins = _db.Connection.CreateCommand())
+                // Android parity (archiveMember is idempotent): if an archive row for this member already
+                // exists — e.g. it just arrived from another device via sync — keep it and log NO second
+                // ARCHIVED_MEMBER ADD for it. A duplicate ADD with a different archivedAt would make the
+                // devices disagree about the archive date.
+                var alreadyArchived = false;
+                using (var chk = _db.Connection.CreateCommand())
                 {
+                    chk.Transaction = tx;
+                    chk.CommandText = "SELECT 1 FROM archived_members WHERE originalMemberId = $id";
+                    chk.Parameters.AddWithValue("$id", record.OriginalMemberId);
+                    alreadyArchived = chk.ExecuteScalar() is not null;
+                }
+
+                if (!alreadyArchived)
+                {
+                    using var ins = _db.Connection.CreateCommand();
                     ins.Transaction = tx;
                     ins.CommandText = """
                         INSERT OR IGNORE INTO archived_members
@@ -558,19 +570,24 @@ public sealed class Repository
                     TimestampMillis = now,
                     FieldsJson = null
                 }, tx);
-                InsertChangeLog(new SyncChangeLogEntry
+                if (!alreadyArchived)
                 {
-                    ChangeId = Guid.NewGuid().ToString(),
-                    EntityType = SyncEntityType.ArchivedMember,
-                    RecordId = record.OriginalMemberId,
-                    Operation = SyncOperation.Add,
-                    OriginDeviceId = _deviceId,
-                    Seq = NextSeqNoLock(_deviceId, tx),
-                    TimestampMillis = now,
-                    FieldsJson = SyncChangeCodec.EncodeArchivedMember(record).ToJsonString()
-                }, tx);
+                    InsertChangeLog(new SyncChangeLogEntry
+                    {
+                        ChangeId = Guid.NewGuid().ToString(),
+                        EntityType = SyncEntityType.ArchivedMember,
+                        RecordId = record.OriginalMemberId,
+                        Operation = SyncOperation.Add,
+                        OriginDeviceId = _deviceId,
+                        Seq = NextSeqNoLock(_deviceId, tx),
+                        TimestampMillis = now,
+                        FieldsJson = SyncChangeCodec.EncodeArchivedMember(record).ToJsonString()
+                    }, tx);
+                }
 
                 tx.Commit();
+                photoStore.DeletePhoto(m.Id);
+                photoStore.DeleteIdProofPhoto(m.Id);
                 archived.Add(record);
             }
             finally
@@ -849,9 +866,9 @@ public sealed class Repository
     /// THIS device's id, so it becomes an ordinary syncable record. Idempotent; gated by
     /// <see cref="MajorGym.Data.Settings.SyncPrefs.HasBackfilledSyncHistory"/>. (Android:
     /// <c>backfillPreSyncHistoryIfNeeded</c>.)</summary>
-    public void BackfillPreSyncHistoryIfNeeded(MajorGym.Data.Settings.SyncPrefs syncPrefs)
+    public void BackfillPreSyncHistoryIfNeeded(MajorGym.Data.Settings.SyncPrefs syncPrefs, bool force = false)
     {
-        if (syncPrefs.HasBackfilledSyncHistory) return;
+        if (!force && syncPrefs.HasBackfilledSyncHistory) return;
         _changeLogLock.Wait();
         try
         {
@@ -971,14 +988,26 @@ public sealed class Repository
             var affectedAttendance = newlyInserted.Where(e => e.EntityType == SyncEntityType.Attendance).Select(e => e.RecordId).ToHashSet();
             var affectedArchived = newlyInserted.Where(e => e.EntityType == SyncEntityType.ArchivedMember).Select(e => e.RecordId).ToHashSet();
 
-            foreach (var id in affectedMembers) RecomputeAndApplyMember(id, photoStore, tx);
-            foreach (var id in affectedAttendance) RecomputeAndApplyAttendance(id, tx);
-            foreach (var id in affectedArchived) RecomputeAndApplyArchivedMember(id, tx);
+            // One bad record must never abort (and roll back) the whole batch — Android applies each record
+            // independently and logs/continues on failure. Without this, a single malformed or conflicting
+            // change made every later sync with that peer fail the same way, forever.
+            foreach (var id in affectedMembers) ApplyIsolated(() => RecomputeAndApplyMember(id, photoStore, tx));
+            foreach (var id in affectedAttendance) ApplyIsolated(() => RecomputeAndApplyAttendance(id, tx));
+            foreach (var id in affectedArchived) ApplyIsolated(() => RecomputeAndApplyArchivedMember(id, tx));
 
             tx.Commit();
             return newlyInserted.Count;
         }
         finally { _changeLogLock.Release(); }
+    }
+
+    private static void ApplyIsolated(Action apply)
+    {
+        try { apply(); }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Trace.TraceWarning($"[Repository] Could not apply one synced record: {ex.Message}");
+        }
     }
 
     /// <summary>Replays a Member's ENTIRE known history (oldest first: timestamp, then originDeviceId,
@@ -1026,6 +1055,7 @@ public sealed class Repository
         if (member is null) return;
         try
         {
+            EvictPhoneConflicts(member, photoStore, tx);
             Upsert(EncryptedForStorage(member), tx);
             RepublishKeptPhoto(member, merged, latestTimestamp, tx);
         }
@@ -1038,6 +1068,36 @@ public sealed class Repository
         }
     }
 
+    /// <summary>Android parity: <c>MemberDao.upsert</c> is <c>OnConflictStrategy.REPLACE</c>, which — on the unique
+    /// phone index — silently removes a DIFFERENT member row holding the same phone number and then inserts the
+    /// incoming one. Windows' plain upsert instead threw a constraint error that was swallowed, so whether a synced
+    /// member appeared depended on the ORDER the batch was applied in: e.g. "member deleted, then re-registered with
+    /// the same phone" arriving as [new member ADD, old member DELETE] lost the new member for good (the change was
+    /// already logged, so it was never retried). Evicting here makes the outcome identical on every device and
+    /// identical to Android's, whatever the arrival order.</summary>
+    private void EvictPhoneConflicts(Member incoming, PhotoStore photoStore, SqliteTransaction tx)
+    {
+        var conflictingIds = new List<string>();
+        using (var sel = _db.Connection.CreateCommand())
+        {
+            sel.Transaction = tx;
+            sel.CommandText = "SELECT id FROM members WHERE phone = $phone AND id <> $id";
+            sel.Parameters.AddWithValue("$phone", incoming.Phone);
+            sel.Parameters.AddWithValue("$id", incoming.Id);
+            using var r = sel.ExecuteReader();
+            while (r.Read()) conflictingIds.Add(r.GetString(0));
+        }
+        foreach (var id in conflictingIds)
+        {
+            using var del = _db.Connection.CreateCommand();
+            del.Transaction = tx;
+            del.CommandText = "DELETE FROM members WHERE id = $id";
+            del.Parameters.AddWithValue("$id", id);
+            del.ExecuteNonQuery();
+            try { photoStore.DeletePhoto(id); photoStore.DeleteIdProofPhoto(id); } catch (IOException) { /* orphan file only */ }
+        }
+    }
+
     /// <summary>
     /// Windows hardening (no Android counterpart). When the merged record said "no profile photo" but
     /// this device still holds the member's real photo (kept by <see cref="SyncChangeCodec.DecodeMemberFields"/>),
@@ -1047,7 +1107,7 @@ public sealed class Repository
     /// </summary>
     private void RepublishKeptPhoto(Member member, JsonObject merged, long latestTimestamp, SqliteTransaction tx)
     {
-        if (!string.IsNullOrWhiteSpace((string?)merged[SyncChangeCodec.PhotoKey])) return;
+        if (!string.IsNullOrWhiteSpace(Js.Str(merged, SyncChangeCodec.PhotoKey))) return;
         if (string.IsNullOrWhiteSpace(member.PhotoPath) || !File.Exists(member.PhotoPath)) return;
         string b64;
         try { b64 = Convert.ToBase64String(File.ReadAllBytes(member.PhotoPath)); }

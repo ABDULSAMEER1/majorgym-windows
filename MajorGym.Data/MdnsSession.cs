@@ -52,15 +52,21 @@ public sealed class MdnsSession : IDisposable
     private Socket? _socket;
     private CancellationTokenSource? _cts;
     private List<IPAddress> _localAddresses = new();
+    private List<LocalInterface> _localInterfaces = new();
+    private HashSet<IPAddress> _localSet = new();
 
     // Browse state (only touched from the receive loop thread).
     private readonly Dictionary<string, (int Port, string Target)> _srv = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, Dictionary<string, string>> _txtByInstance = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, HashSet<IPAddress>> _aByHost = new(StringComparer.OrdinalIgnoreCase);
-    private readonly Dictionary<string, IPAddress> _sourceByInstance = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, HashSet<IPAddress>> _sourcesByInstance = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _knownInstances = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, DateTime> _lastQuery = new();
-    private readonly HashSet<string> _reported = new(StringComparer.OrdinalIgnoreCase);
+    // Last time each (instance|port|addresses) tuple was reported. Re-reported after a short pause instead of
+    // exactly once, so a consumer whose first dial failed (peer's listener not up yet, wrong adapter, ...) gets
+    // another chance — Android's NSD callbacks give its SyncManager the same repeated opportunities.
+    private readonly Dictionary<string, DateTime> _reported = new(StringComparer.OrdinalIgnoreCase);
+    private const int ReReportMs = 1500;
 
     /// <summary>Raised (on a background thread) once a peer's SRV + TXT (+ address) are known.
     /// May be raised again if more addresses become known; consumers must be idempotent.</summary>
@@ -79,7 +85,9 @@ public sealed class MdnsSession : IDisposable
     /// Throws if mDNS cannot be used at all (no usable network interface / port refused).</summary>
     public void Start()
     {
-        _localAddresses = GetLocalIPv4Addresses();
+        _localInterfaces = EnumerateLocalInterfaces();
+        _localAddresses = _localInterfaces.Select(i => i.Address).ToList();
+        _localSet = new HashSet<IPAddress>(_localAddresses);
         if (_localAddresses.Count == 0)
             throw new InvalidOperationException("No active network connection found. Connect to Wi-Fi or a hotspot and try again.");
 
@@ -208,11 +216,19 @@ public sealed class MdnsSession : IDisposable
                 {
                     var p = rdStart;
                     var instance = ReadName(msg, ref p);
-                    if (goodbye) { _knownInstances.Remove(instance); }
+                    if (goodbye)
+                    {
+                        // Peer ended its session: forget its (now dead) port and addresses so a stale
+                        // announcement can never be dialed; its next session re-announces everything.
+                        _knownInstances.Remove(instance);
+                        _srv.Remove(instance);
+                        _txtByInstance.Remove(instance);
+                        _sourcesByInstance.Remove(instance);
+                    }
                     else if (!instance.Equals(_instanceFqdn, StringComparison.OrdinalIgnoreCase))
                     {
                         _knownInstances.Add(instance);
-                        _sourceByInstance[instance] = source;
+                        AddSource(instance, source);
                     }
                     break;
                 }
@@ -223,7 +239,7 @@ public sealed class MdnsSession : IDisposable
                     p += 2;
                     var target = ReadName(msg, ref p);
                     _srv[name] = (port, target);
-                    _sourceByInstance.TryAdd(name, source);
+                    AddSource(name, source);
                     break;
                 }
                 case TypeTxt when !goodbye:
@@ -268,14 +284,17 @@ public sealed class MdnsSession : IDisposable
                 continue;
             }
 
-            var addresses = new List<IPAddress>();
-            if (_aByHost.TryGetValue(srv.Target, out var set)) addresses.AddRange(set);
+            var advertised = new List<IPAddress>();
+            if (_aByHost.TryGetValue(srv.Target, out var set)) advertised.AddRange(set);
             else ThrottledQuery(srv.Target, TypeA);
-            if (_sourceByInstance.TryGetValue(instance, out var src) && !addresses.Contains(src)) addresses.Add(src);
+            _sourcesByInstance.TryGetValue(instance, out var sources);
+            var addresses = OrderPeerAddresses(advertised, sources);
             if (addresses.Count == 0) continue;
 
-            var key = $"{instance}|{srv.Port}|{string.Join(",", addresses.Select(a => a.ToString()).OrderBy(x => x))}";
-            if (!_reported.Add(key)) continue;
+            var key = $"{instance}|{srv.Port}|{string.Join(",", addresses.Select(a => a.ToString()))}";
+            var now = DateTime.UtcNow;
+            if (_reported.TryGetValue(key, out var lastRaised) && (now - lastRaised).TotalMilliseconds < ReReportMs) continue;
+            _reported[key] = now;
 
             var label = instance.EndsWith("." + ServiceName, StringComparison.OrdinalIgnoreCase)
                 ? instance[..^(ServiceName.Length + 1)] : instance;
@@ -370,23 +389,108 @@ public sealed class MdnsSession : IDisposable
 
     // ---------------------------------------------------------------- helpers
 
-    private static List<IPAddress> GetLocalIPv4Addresses()
+    /// <summary>One usable local IPv4 interface address.</summary>
+    internal sealed record LocalInterface(IPAddress Address, IPAddress? Mask, bool HasGateway);
+
+    /// <summary>The local IPv4 addresses this session advertises and joins multicast on.
+    /// Exposed for diagnostics.</summary>
+    public IReadOnlyList<IPAddress> LocalAddresses => _localAddresses;
+
+    // Adapters that exist on a PC but are never on the same network as a phone / another PC. Advertising
+    // their addresses makes the peer waste its whole sync window dialing addresses it can never reach.
+    private static readonly string[] VirtualAdapterMarkers =
     {
-        var result = new List<IPAddress>();
+        "vmware", "virtualbox", "vbox", "docker", "wsl", "tap-windows", "wintun", "wireguard", "tailscale",
+        "zerotier", "hamachi", "npcap", "bluetooth", "openvpn", "nordlynx", "teredo", "isatap", "pseudo-interface"
+    };
+
+    private static bool LooksVirtual(NetworkInterface nic, bool hasGateway)
+    {
+        var text = $"{nic.Name} {nic.Description}".ToLowerInvariant();
+        // Hyper-V "vEthernet": the internal Default Switch / WSL switch has no gateway and is never a LAN the
+        // phones are on, but an *External* switch carries the PC's real network (and does have a gateway).
+        if (text.Contains("vethernet") || text.Contains("hyper-v")) return !hasGateway;
+        foreach (var marker in VirtualAdapterMarkers)
+            if (text.Contains(marker)) return true;
+        return false;
+    }
+
+    /// <summary>Every up, multicast-capable, non-loopback IPv4 interface address, real LAN adapters only
+    /// (VMs / VPNs / Docker / WSL excluded) and ones with a default gateway first. A Mobile Hotspot adapter
+    /// (no gateway) is deliberately kept. If filtering would leave nothing, everything is used.</summary>
+    private static List<LocalInterface> EnumerateLocalInterfaces()
+    {
+        var all = new List<(LocalInterface Nic, bool IsVirtual)>();
         foreach (var nic in NetworkInterface.GetAllNetworkInterfaces())
         {
-            if (nic.OperationalStatus != OperationalStatus.Up) continue;
-            if (nic.NetworkInterfaceType is NetworkInterfaceType.Loopback or NetworkInterfaceType.Tunnel) continue;
-            if (!nic.SupportsMulticast) continue;
-            foreach (var ua in nic.GetIPProperties().UnicastAddresses)
+            try
             {
-                if (ua.Address.AddressFamily != AddressFamily.InterNetwork) continue;
-                var b = ua.Address.GetAddressBytes();
-                if (b[0] == 169 && b[1] == 254) continue; // link-local self-assigned = no real network
-                result.Add(ua.Address);
+                if (nic.OperationalStatus != OperationalStatus.Up) continue;
+                if (nic.NetworkInterfaceType is NetworkInterfaceType.Loopback or NetworkInterfaceType.Tunnel) continue;
+                if (!nic.SupportsMulticast) continue;
+                var props = nic.GetIPProperties();
+                var hasGateway = props.GatewayAddresses.Any(g =>
+                    g.Address.AddressFamily == AddressFamily.InterNetwork && !g.Address.Equals(IPAddress.Any));
+                var isVirtual = LooksVirtual(nic, hasGateway);
+                foreach (var ua in props.UnicastAddresses)
+                {
+                    if (ua.Address.AddressFamily != AddressFamily.InterNetwork) continue;
+                    var b = ua.Address.GetAddressBytes();
+                    if (b[0] == 169 && b[1] == 254) continue; // link-local self-assigned = no real network
+                    IPAddress? mask = null;
+                    try { mask = ua.IPv4Mask; } catch { /* mask unavailable — subnet preference simply won't apply */ }
+                    all.Add((new LocalInterface(ua.Address, mask, hasGateway), isVirtual));
+                }
             }
+            catch (Exception) { /* a misbehaving adapter driver must not break discovery */ }
         }
-        return result;
+        var real = all.Where(x => !x.IsVirtual).ToList();
+        return (real.Count > 0 ? real : all)
+            .OrderByDescending(x => x.Nic.HasGateway)
+            .Select(x => x.Nic)
+            .ToList();
+    }
+
+    private void AddSource(string instance, IPAddress source)
+    {
+        if (!_sourcesByInstance.TryGetValue(instance, out var set))
+            _sourcesByInstance[instance] = set = new HashSet<IPAddress>();
+        set.Add(source);
+    }
+
+    private bool SharesSubnetWithUs(IPAddress candidate)
+    {
+        var c = candidate.GetAddressBytes();
+        foreach (var nic in _localInterfaces)
+        {
+            if (nic.Mask is null) continue;
+            var l = nic.Address.GetAddressBytes();
+            var m = nic.Mask.GetAddressBytes();
+            var same = true;
+            for (var i = 0; i < 4 && same; i++) same = (c[i] & m[i]) == (l[i] & m[i]);
+            if (same) return true;
+        }
+        return false;
+    }
+
+    /// <summary>Orders a peer's candidate addresses best-first: addresses its packets actually arrived from
+    /// (provably reachable), then ones on a subnet this PC is also on, then the rest. This PC's own addresses
+    /// and self-assigned 169.254.x.x addresses are dropped unless nothing else is left.</summary>
+    private List<IPAddress> OrderPeerAddresses(IEnumerable<IPAddress> advertised, IEnumerable<IPAddress>? heardFrom)
+    {
+        var sources = (heardFrom ?? Enumerable.Empty<IPAddress>())
+            .Where(a => a.AddressFamily == AddressFamily.InterNetwork).ToList();
+        var pool = sources.Concat(advertised.Where(a => a.AddressFamily == AddressFamily.InterNetwork)).Distinct().ToList();
+
+        var foreign = pool.Where(a => !_localSet.Contains(a)).ToList();
+        if (foreign.Count > 0) pool = foreign;
+        var routable = pool.Where(a => { var b = a.GetAddressBytes(); return !(b[0] == 169 && b[1] == 254); }).ToList();
+        if (routable.Count > 0) pool = routable;
+
+        return pool
+            .OrderBy(a => sources.Contains(a) ? 0 : SharesSubnetWithUs(a) ? 1 : 2)
+            .ThenBy(a => a.ToString(), StringComparer.Ordinal)
+            .ToList();
     }
 
     private static ushort ReadU16(byte[] m, ref int pos) { var v = (ushort)((m[pos] << 8) | m[pos + 1]); pos += 2; return v; }

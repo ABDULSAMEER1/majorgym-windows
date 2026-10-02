@@ -29,15 +29,24 @@ public sealed class SyncPrefs
     public SyncPrefs(string appDataDirectory) =>
         _store = new LocalSettingsStore(appDataDirectory, "majorgym_sync");
 
+    private readonly object _idLock = new();
+    private string? _deviceId;
+
+    /// <summary>Stable for the life of the process once read: the Repository captures this value at startup and
+    /// stamps every change-log entry with it, so it must never differ from what SyncManager advertises.</summary>
     public string DeviceId
     {
         get
         {
-            var existing = _store.GetString(KeyDeviceId);
-            if (existing is not null) return existing;
-            var fresh = Guid.NewGuid().ToString();
-            _store.SetString(KeyDeviceId, fresh);
-            return fresh;
+            lock (_idLock)
+            {
+                if (_deviceId is not null) return _deviceId;
+                var existing = _store.GetString(KeyDeviceId);
+                if (!string.IsNullOrWhiteSpace(existing)) return _deviceId = existing;
+                var fresh = Guid.NewGuid().ToString();
+                _store.SetString(KeyDeviceId, fresh);
+                return _deviceId = fresh;
+            }
         }
     }
 
