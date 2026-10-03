@@ -31,7 +31,9 @@ public enum FilteredMembersKind { Total, Active, Expiring, Expired, Due }
 /// </summary>
 public sealed class FilteredMembersViewModel : INotifyPropertyChanged
 {
-    private readonly List<Member> _source;
+    // Row view-models are built once; search just picks from this list (no per-keystroke object creation).
+    private readonly List<MemberRowViewModel> _sourceRows;
+    private readonly Debouncer _filterDebounce;
 
     public FilteredMembersKind Kind { get; }
     public string Title { get; }
@@ -39,10 +41,11 @@ public sealed class FilteredMembersViewModel : INotifyPropertyChanged
     public bool ShowDueAmount { get; }
     private readonly string _emptyText;
 
-    public ObservableCollection<MemberRowViewModel> Rows { get; } = new();
+    public BulkObservableCollection<MemberRowViewModel> Rows { get; } = new();
 
     private string _searchText = "";
-    public string SearchText { get => _searchText; set { _searchText = value; OnPropertyChanged(); ApplyFilter(); } }
+    /// <summary>The box updates instantly; the list re-filters ~150 ms after the user stops typing/deleting.</summary>
+    public string SearchText { get => _searchText; set { if (_searchText == value) return; _searchText = value ?? ""; OnPropertyChanged(); _filterDebounce.Trigger(); } }
 
     private string _emptyMessage = "";
     public string EmptyMessage { get => _emptyMessage; private set { _emptyMessage = value; OnPropertyChanged(); } }
@@ -54,9 +57,10 @@ public sealed class FilteredMembersViewModel : INotifyPropertyChanged
     public FilteredMembersViewModel(Repository repository, NavigationViewModel nav, FilteredMembersKind kind)
     {
         Kind = kind;
-        var all = repository.GetAllByName();
+        // List screens only display members, so fingerprint templates are not read/decrypted here.
+        var all = repository.GetAllByNameForList();
 
-        (Title, _source, ShowSearch, ShowDueAmount, _emptyText) = kind switch
+        (Title, var source, ShowSearch, ShowDueAmount, _emptyText) = kind switch
         {
             FilteredMembersKind.Total => ("Total Members", all, true, false, "No members yet."),
             FilteredMembersKind.Active => ("Active Members",
@@ -76,6 +80,8 @@ public sealed class FilteredMembersViewModel : INotifyPropertyChanged
 
         BackCommand = new RelayCommand(() => nav.NavigateTo(new Screen.Dashboard()));
         _nav = nav;
+        _sourceRows = source.Select(m => MemberRowViewModel.For(m, nav, showDueAmount: ShowDueAmount)).ToList();
+        _filterDebounce = new Debouncer(ApplyFilter);
         ApplyFilter();
     }
 
@@ -83,16 +89,15 @@ public sealed class FilteredMembersViewModel : INotifyPropertyChanged
 
     private void ApplyFilter()
     {
-        Rows.Clear();
         var query = SearchText.Trim();
         // Android: it.name.contains(query, ignoreCase = true) || it.phone.contains(query) || it.idProof.contains(query, ignoreCase = true)
         var shown = (ShowSearch && !string.IsNullOrEmpty(query))
-            ? _source.Where(m => m.Name.Contains(query, StringComparison.OrdinalIgnoreCase)
-                               || m.Phone.Contains(query, StringComparison.OrdinalIgnoreCase)
-                               || m.IdProof.Contains(query, StringComparison.OrdinalIgnoreCase))
-            : _source;
+            ? _sourceRows.Where(r => r.Member.Name.Contains(query, StringComparison.OrdinalIgnoreCase)
+                                  || r.Member.Phone.Contains(query, StringComparison.OrdinalIgnoreCase)
+                                  || r.Member.IdProof.Contains(query, StringComparison.OrdinalIgnoreCase))
+            : _sourceRows;
 
-        foreach (var m in shown) Rows.Add(MemberRowViewModel.For(m, _nav, showDueAmount: ShowDueAmount));
+        Rows.ReplaceAll(shown);
 
         EmptyMessage = (ShowSearch && !string.IsNullOrEmpty(query)) ? "No members match your search." : _emptyText;
         OnPropertyChanged(nameof(HasRows));

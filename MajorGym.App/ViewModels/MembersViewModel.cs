@@ -1,4 +1,3 @@
-using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Windows.Input;
 using MajorGym.App.Navigation;
@@ -23,39 +22,41 @@ namespace MajorGym.App.ViewModels;
 /// </summary>
 public sealed class MembersViewModel : INotifyPropertyChanged
 {
-    private readonly List<Data.Entities.Member> _all;
-    private readonly NavigationViewModel _nav;
+    // Row view-models are built ONCE (not on every keystroke); filtering just picks from this list.
+    private readonly List<MemberRowViewModel> _allRows;
+    private readonly Debouncer _filterDebounce;
 
-    public ObservableCollection<MemberRowViewModel> Rows { get; } = new();
+    public BulkObservableCollection<MemberRowViewModel> Rows { get; } = new();
 
     private string _searchText = "";
+    /// <summary>The box updates instantly; the list re-filters ~150 ms after the user stops typing/deleting.</summary>
     public string SearchText
     {
         get => _searchText;
-        set { _searchText = value; OnPropertyChanged(); ApplyFilter(); }
+        set { if (_searchText == value) return; _searchText = value ?? ""; OnPropertyChanged(); _filterDebounce.Trigger(); }
     }
 
     public ICommand AddMemberCommand { get; }
 
     public MembersViewModel(Repository repository, NavigationViewModel nav)
     {
-        _nav = nav;
-        _all = repository.GetAllByName();
-        AddMemberCommand = new RelayCommand(() => _nav.NavigateTo(new Screen.Add()));
+        // List screens only display members, so fingerprint templates are not read/decrypted here.
+        _allRows = repository.GetAllByNameForList().Select(m => MemberRowViewModel.For(m, nav)).ToList();
+        _filterDebounce = new Debouncer(ApplyFilter);
+        AddMemberCommand = new RelayCommand(() => nav.NavigateTo(new Screen.Add()));
         ApplyFilter();
     }
 
     private void ApplyFilter()
     {
-        Rows.Clear();
         var query = SearchText.Trim();
         var filtered = string.IsNullOrEmpty(query)
-            ? _all
-            : _all.Where(m => m.Name.Contains(query, StringComparison.OrdinalIgnoreCase)
-                            || m.Phone.Contains(query, StringComparison.OrdinalIgnoreCase)
-                            || m.IdProof.Contains(query, StringComparison.OrdinalIgnoreCase));
+            ? _allRows
+            : _allRows.Where(r => r.Member.Name.Contains(query, StringComparison.OrdinalIgnoreCase)
+                               || r.Member.Phone.Contains(query, StringComparison.OrdinalIgnoreCase)
+                               || r.Member.IdProof.Contains(query, StringComparison.OrdinalIgnoreCase));
 
-        foreach (var m in filtered) Rows.Add(MemberRowViewModel.For(m, _nav));
+        Rows.ReplaceAll(filtered);
     }
 
     public event PropertyChangedEventHandler? PropertyChanged;

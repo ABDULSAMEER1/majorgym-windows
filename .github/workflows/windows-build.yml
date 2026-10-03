@@ -139,8 +139,15 @@ jobs:
         continue-on-error: true
         shell: pwsh
         run: |
-          dotnet publish MajorGym.App/MajorGym.App.csproj -c Release -r win-x64 --self-contained true -p:Platform=x64 -o publish
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          # ReadyToRun = the app's code is precompiled, so it starts noticeably faster (no JIT on every launch).
+          # If that step ever fails, fall back to the plain self-contained publish so the installer is still produced.
+          dotnet publish MajorGym.App/MajorGym.App.csproj -c Release -r win-x64 --self-contained true -p:Platform=x64 -p:PublishReadyToRun=true -o publish
+          if ($LASTEXITCODE -ne 0) {
+            Write-Warning "ReadyToRun publish failed - falling back to a normal self-contained publish."
+            if (Test-Path publish) { Remove-Item publish -Recurse -Force }
+            dotnet publish MajorGym.App/MajorGym.App.csproj -c Release -r win-x64 --self-contained true -p:Platform=x64 -o publish
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
           # Overlay anything the verified build output has that publish left out (SecuGen sg*.dll modules, Assets\Audio,
           # Drivers\...), so the installer contains exactly what the working build does.
           $out = "${{ steps.locate.outputs.outdir }}"

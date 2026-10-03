@@ -52,6 +52,8 @@ public sealed class AttendanceLogsViewModel : INotifyPropertyChanged
     private readonly NavigationViewModel _nav;
     private readonly AttendanceSettingsPrefs _prefs;
     private readonly DispatcherTimer _debounce;
+    private readonly Debouncer _queryDebounce;
+    private List<(AttendanceRecord Rec, Member Member)> _dayEntries = new();
 
     private DateTime _selectedDate = DateTime.Today;
     private string _query = "";
@@ -60,7 +62,7 @@ public sealed class AttendanceLogsViewModel : INotifyPropertyChanged
     private string? _presentText, _morningText, _eveningText;
     private string _emptyMessage = "";
 
-    public ObservableCollection<AttendanceEntryViewModel> Entries { get; } = new();
+    public BulkObservableCollection<AttendanceEntryViewModel> Entries { get; } = new();
 
     public IReadOnlyList<AttendanceFilterOption> FilterOptions { get; }
 
@@ -88,7 +90,9 @@ public sealed class AttendanceLogsViewModel : INotifyPropertyChanged
     public string Query
     {
         get => _query;
-        set { if (_query == value) return; _query = value ?? ""; OnPropertyChanged(); Refresh(); }
+        // The box updates instantly; the list re-filters ~150 ms after the user stops typing/deleting. Searching only
+        // filters the day's records already in memory - it no longer re-reads the database on every keystroke.
+        set { if (_query == value) return; _query = value ?? ""; OnPropertyChanged(); _queryDebounce.Trigger(); }
     }
 
     public bool IsDatePickerOpen { get => _isDatePickerOpen; set { _isDatePickerOpen = value; OnPropertyChanged(); } }
@@ -104,9 +108,9 @@ public sealed class AttendanceLogsViewModel : INotifyPropertyChanged
     public bool HasEveningText => _eveningText is not null;
 
     // ---- settings dialog switches (persisted immediately, like Android) ----
-    public bool ShowPresent { get => _prefs.IsCountVisible(AttendanceCount.PRESENT); set { _prefs.SetCountVisible(AttendanceCount.PRESENT, value); OnPropertyChanged(); Refresh(); } }
-    public bool ShowMorning { get => _prefs.IsCountVisible(AttendanceCount.MORNING); set { _prefs.SetCountVisible(AttendanceCount.MORNING, value); OnPropertyChanged(); Refresh(); } }
-    public bool ShowEvening { get => _prefs.IsCountVisible(AttendanceCount.EVENING); set { _prefs.SetCountVisible(AttendanceCount.EVENING, value); OnPropertyChanged(); Refresh(); } }
+    public bool ShowPresent { get => _prefs.IsCountVisible(AttendanceCount.PRESENT); set { _prefs.SetCountVisible(AttendanceCount.PRESENT, value); OnPropertyChanged(); ApplyFilters(); } }
+    public bool ShowMorning { get => _prefs.IsCountVisible(AttendanceCount.MORNING); set { _prefs.SetCountVisible(AttendanceCount.MORNING, value); OnPropertyChanged(); ApplyFilters(); } }
+    public bool ShowEvening { get => _prefs.IsCountVisible(AttendanceCount.EVENING); set { _prefs.SetCountVisible(AttendanceCount.EVENING, value); OnPropertyChanged(); ApplyFilters(); } }
 
     public string EmptyMessage { get => _emptyMessage; private set { _emptyMessage = value; OnPropertyChanged(); OnPropertyChanged(nameof(HasEmptyMessage)); } }
     public bool HasEmptyMessage => _emptyMessage.Length > 0;
@@ -126,7 +130,7 @@ public sealed class AttendanceLogsViewModel : INotifyPropertyChanged
         ToggleFilterMenuCommand = new RelayCommand(() => IsFilterMenuOpen = !IsFilterMenuOpen);
         AttendanceFilterOption Option(AttendanceFilter f, string label) => new(f, label, new RelayCommand(() =>
         {
-            _filter = f; IsFilterMenuOpen = false; OnPropertyChanged(nameof(FilterLabel)); Refresh();
+            _filter = f; IsFilterMenuOpen = false; OnPropertyChanged(nameof(FilterLabel)); ApplyFilters();
         }));
         FilterOptions = new[]
         {
@@ -144,12 +148,14 @@ public sealed class AttendanceLogsViewModel : INotifyPropertyChanged
         _debounce = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(700) };
         _debounce.Tick += (_, _) => { _debounce.Stop(); Refresh(); };
 
+        _queryDebounce = new Debouncer(ApplyFilters);
+
         Refresh();
     }
 
     /// <summary>Called by the view's Loaded/Unloaded so the bus subscription never outlives the screen.</summary>
     public void Activate() { App.KioskLoop.Bus.CurrentChanged += OnKioskChanged; Refresh(); }
-    public void Deactivate() { App.KioskLoop.Bus.CurrentChanged -= OnKioskChanged; _debounce.Stop(); }
+    public void Deactivate() { App.KioskLoop.Bus.CurrentChanged -= OnKioskChanged; _debounce.Stop(); _queryDebounce.Cancel(); }
 
     private void OnKioskChanged(object? sender, KioskEvent? e) =>
         Application.Current.Dispatcher.BeginInvoke(() => { _debounce.Stop(); _debounce.Start(); });
@@ -166,11 +172,19 @@ public sealed class AttendanceLogsViewModel : INotifyPropertyChanged
         {
             var earliest = group.OrderBy(r => r.TimestampMillis).First();
             if (!memberCache.TryGetValue(group.Key, out var member))
-                memberCache[group.Key] = member = _repository.GetById(group.Key);
+                memberCache[group.Key] = member = _repository.GetByIdForList(group.Key); // display-only (no template decrypt)
             if (member is null) continue;
             dayEntries.Add((earliest, member));
         }
 
+        _dayEntries = dayEntries;
+        ApplyFilters();
+    }
+
+    /// <summary>Search / filter / counts over the day's records already loaded by <see cref="Refresh"/> (no database access).</summary>
+    private void ApplyFilters()
+    {
+        var dayEntries = _dayEntries;
         IEnumerable<(AttendanceRecord Rec, Member Member)> searched = dayEntries;
         if (!string.IsNullOrWhiteSpace(_query))
         {
@@ -196,12 +210,12 @@ public sealed class AttendanceLogsViewModel : INotifyPropertyChanged
         MorningText = _prefs.IsCountVisible(AttendanceCount.MORNING) ? list.Count(e => e.Rec.Session == morning).ToString() : null;
         EveningText = _prefs.IsCountVisible(AttendanceCount.EVENING) ? list.Count(e => e.Rec.Session == evening).ToString() : null;
 
-        Entries.Clear();
+        var rows = new List<AttendanceEntryViewModel>(list.Count);
         foreach (var (rec, member) in list)
         {
             var status = MemberStatusExtensions.StatusOf(member.ExpiryMillis);
             var id = member.Id;
-            Entries.Add(new AttendanceEntryViewModel
+            rows.Add(new AttendanceEntryViewModel
             {
                 MemberId = id,
                 MemberName = member.Name,
@@ -214,6 +228,7 @@ public sealed class AttendanceLogsViewModel : INotifyPropertyChanged
                 OpenCommand = new RelayCommand(() => _nav.NavigateTo(new Screen.AttendanceHistory(id)))
             });
         }
+        Entries.ReplaceAll(rows);
 
         EmptyMessage = list.Count > 0 ? ""
             : !string.IsNullOrWhiteSpace(_query) ? "No attendance records match your search."

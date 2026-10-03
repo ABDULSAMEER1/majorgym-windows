@@ -37,6 +37,27 @@ public sealed class Repository
 
     public const long AttendanceRetentionMonths = 4L; // Android: ATTENDANCE_RETENTION_MONTHS
 
+    /// <summary>
+    /// Raised after a committed change that can alter WHICH fingerprints are enrolled (a template added, replaced
+    /// or removed; a member deleted/archived; a backup restore; a sync batch). The scanner loop keeps the enrolled
+    /// members in memory and reloads them only when this fires - the Windows equivalent of Android's
+    /// <c>repository.observeAll().collect</c> (Room pushes changes), instead of polling the database on a timer.
+    /// Raised on the thread that made the change; handlers must be quick and thread-safe. Edits that do not touch a
+    /// fingerprint (renewals, attendance stamps, name/photo edits) deliberately do NOT raise it.
+    /// </summary>
+    public event Action? EnrolledFingerprintsChanged;
+    private bool _enrolledChangedPending;
+    private void MarkEnrolledChanged() => _enrolledChangedPending = true;
+    private void FlushEnrolledChanged()
+    {
+        if (!_enrolledChangedPending) return;
+        _enrolledChangedPending = false;
+        try { EnrolledFingerprintsChanged?.Invoke(); }
+        catch (Exception e) { System.Diagnostics.Trace.TraceError($"[Repository] EnrolledFingerprintsChanged handler failed: {e.Message}"); }
+    }
+    private static bool SameBytes(byte[]? a, byte[]? b) =>
+        ReferenceEquals(a, b) || (a is not null && b is not null && a.AsSpan().SequenceEqual(b));
+
     public Repository(AppDatabase db, string deviceId)
     {
         _db = db;
@@ -69,6 +90,64 @@ public sealed class Repository
         while (reader.Read()) result.Add(DecryptedForApp(ReadMember(reader)));
         return result;
     }
+
+    /// <summary>Every member column EXCEPT the fingerprint template (returned as NULL). Screens that only DISPLAY members
+    /// (lists, dashboard, attendance rows) use this so they never pay to read and DPAPI-decrypt a template per member.
+    /// The returned members must never be passed to <see cref="Save"/> (their template is intentionally null).</summary>
+    private const string ListColumns =
+        "id, name, phone, photoPath, plan, fee, joinedMillis, expiryMillis, historyJson, updatedAtMillis, passwordHash, " +
+        "createdAtMillis, lastAttendanceMillis, archived, qrToken, qrTokenExpiryMillis, idProof, idProofPhotoPath, " +
+        "NULL AS fingerprintTemplate, pendingDeletionMillis";
+
+    /// <summary>Display-only read of all members, unordered, without fingerprint templates (see <see cref="ListColumns"/>).</summary>
+    public List<Member> GetAllForList()
+    {
+        using var cmd = _db.Connection.CreateCommand();
+        cmd.CommandText = $"SELECT {ListColumns} FROM members";
+        using var reader = cmd.ExecuteReader();
+        var result = new List<Member>();
+        while (reader.Read()) result.Add(ReadMember(reader));
+        return result;
+    }
+
+    /// <summary>Display-only read of all members ordered like <see cref="GetAllByName"/> (SQL BINARY name order),
+    /// without fingerprint templates. Used by the Members / Total / Active / Expiring / Expired / Due lists.</summary>
+    public List<Member> GetAllByNameForList()
+    {
+        using var cmd = _db.Connection.CreateCommand();
+        cmd.CommandText = $"SELECT {ListColumns} FROM members ORDER BY name ASC";
+        using var reader = cmd.ExecuteReader();
+        var result = new List<Member>();
+        while (reader.Read()) result.Add(ReadMember(reader));
+        return result;
+    }
+
+    /// <summary>Display-only single-member read without the fingerprint template.</summary>
+    public Member? GetByIdForList(string id)
+    {
+        using var cmd = _db.Connection.CreateCommand();
+        cmd.CommandText = $"SELECT {ListColumns} FROM members WHERE id = $id";
+        cmd.Parameters.AddWithValue("$id", id);
+        using var reader = cmd.ExecuteReader();
+        return reader.Read() ? ReadMember(reader) : null;
+    }
+
+    /// <summary>The scanner loop's two-step load. Step 1 (must run on the thread that owns the database connection):
+    /// the enrolled members, most recent check-in first, with templates still ENCRYPTED. Step 2 (any thread, see
+    /// <see cref="DecryptTemplateForApp"/>): decrypt them, so the slow per-member DPAPI calls never block the UI.</summary>
+    public List<Member> GetEnrolledEncrypted()
+    {
+        using var cmd = _db.Connection.CreateCommand();
+        cmd.CommandText = "SELECT * FROM members WHERE fingerprintTemplate IS NOT NULL ORDER BY COALESCE(lastAttendanceMillis, 0) DESC";
+        using var reader = cmd.ExecuteReader();
+        var result = new List<Member>();
+        while (reader.Read()) result.Add(ReadMember(reader));
+        return result;
+    }
+
+    /// <summary>Decrypts a member read by <see cref="GetEnrolledEncrypted"/>. Pure CPU work with no database access, so it is
+    /// safe to call from a background thread.</summary>
+    public static Member DecryptTemplateForApp(Member m) => DecryptedForApp(m);
 
     public Member? GetById(string id)
     {
@@ -113,6 +192,7 @@ public sealed class Repository
         {
             _changeLogLock.Release();
         }
+        FlushEnrolledChanged();
     }
 
     /// <summary>The body of <see cref="Save"/>, runnable inside a caller-owned transaction
@@ -123,6 +203,7 @@ public sealed class Repository
         Func<string, byte[]?>? pendingPhotoBytes = null)
     {
         var existing = GetByIdOnceNoLock(member.Id, tx);
+        if (!SameBytes(existing?.FingerprintTemplate, member.FingerprintTemplate)) MarkEnrolledChanged();
         var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         var toStore = member.UpdatedAtMillis > 0 || !stampMissingUpdatedAt ? member : CloneWithUpdatedAt(member, now);
         var logTs = toStore.UpdatedAtMillis > 0 ? toStore.UpdatedAtMillis : now;
@@ -242,6 +323,13 @@ public sealed class Repository
     /// deletion from the member itself disappearing).
     /// </summary>
     public void DeleteWithFiles(Member member, PhotoStore photoStore)
+    {
+        MarkEnrolledChanged();
+        DeleteWithFilesCore(member, photoStore);
+        FlushEnrolledChanged();
+    }
+
+    private void DeleteWithFilesCore(Member member, PhotoStore photoStore)
     {
         _changeLogLock.Wait();
         try
@@ -456,10 +544,18 @@ public sealed class Repository
     /// </summary>
     public List<ArchivedMember> ArchiveExpiredMembersOnce(PhotoStore photoStore, long thresholdDays = 30)
     {
+        var result = ArchiveExpiredMembersCore(photoStore, thresholdDays);
+        if (result.Count > 0) { MarkEnrolledChanged(); FlushEnrolledChanged(); }
+        return result;
+    }
+
+    private List<ArchivedMember> ArchiveExpiredMembersCore(PhotoStore photoStore, long thresholdDays)
+    {
         var archived = new List<ArchivedMember>();
         var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
 
-        foreach (var m in GetAll())
+        // Only expiry/plan/identity fields are needed here, so skip reading + decrypting every fingerprint template.
+        foreach (var m in GetAllForList())
         {
             var days = DateUtils.DaysBetweenNow(m.ExpiryMillis);
             if (days > -thresholdDays) continue; // not expired long enough yet
@@ -758,6 +854,16 @@ public sealed class Repository
         IReadOnlyList<Member> members, IReadOnlyList<AttendanceRecord> attendance, IReadOnlyList<ArchivedMember> archivedMembers,
         Func<string, byte[]?>? pendingPhotoBytes = null)
     {
+        var counts = RestoreBackupCore(members, attendance, archivedMembers, pendingPhotoBytes);
+        MarkEnrolledChanged();
+        FlushEnrolledChanged();
+        return counts;
+    }
+
+    private RestoreCounts RestoreBackupCore(
+        IReadOnlyList<Member> members, IReadOnlyList<AttendanceRecord> attendance, IReadOnlyList<ArchivedMember> archivedMembers,
+        Func<string, byte[]?>? pendingPhotoBytes)
+    {
         _changeLogLock.Wait();
         try
         {
@@ -993,6 +1099,13 @@ public sealed class Repository
     /// requires), then recomputes and re-applies the merged state of every record any NEW entry
     /// touched. Returns how many entries were genuinely new. (Android: <c>applyRemoteChanges</c>.)</summary>
     public int ApplyRemoteChanges(IReadOnlyList<SyncChangeLogEntry> entries, PhotoStore photoStore)
+    {
+        var applied = ApplyRemoteChangesCore(entries, photoStore);
+        if (applied > 0) { MarkEnrolledChanged(); FlushEnrolledChanged(); }
+        return applied;
+    }
+
+    private int ApplyRemoteChangesCore(IReadOnlyList<SyncChangeLogEntry> entries, PhotoStore photoStore)
     {
         if (entries.Count == 0) return 0;
         _changeLogLock.Wait();

@@ -70,7 +70,9 @@ public sealed class AppDatabase : IDisposable
             // behavior contract), but foreign_keys=ON is set because CASCADE-free integrity
             // is assumed by the schema below exactly as it was assumed on Android (no
             // explicit FK constraints were declared there either — see Entities/*.cs comments).
-            pragma.CommandText = "PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;";
+            // cache_size is in KiB when negative (16 MB page cache); temp_store keeps sorts/temp b-trees in memory.
+            // Durability settings (synchronous) are deliberately left at SQLite's default.
+            pragma.CommandText = "PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA cache_size=-16000; PRAGMA temp_store=MEMORY;";
             pragma.ExecuteNonQuery();
         }
 
@@ -117,6 +119,10 @@ public sealed class AppDatabase : IDisposable
             );
             """);
         Exec("CREATE UNIQUE INDEX IF NOT EXISTS index_members_phone ON members(phone);"); // MIGRATION_2_3
+        // Windows performance indexes (no Android counterpart; harmless to the schema contract): name backs the
+        // "ORDER BY name ASC" every member list uses, expiryMillis backs status/expiry lookups.
+        Exec("CREATE INDEX IF NOT EXISTS index_members_name ON members(name);");
+        Exec("CREATE INDEX IF NOT EXISTS index_members_expiryMillis ON members(expiryMillis);");
 
         // ---------------------------------------------------------------------------
         // attendance_records — created MIGRATION_7_8, globalId column + unique index

@@ -68,7 +68,7 @@ public sealed class DashboardViewModel : INotifyPropertyChanged
         _nav = nav;
         _privacy = new DashboardPrivacyPrefs(App.AppDataDirectory);
 
-        var members = _repository.GetAll();
+        var members = _repository.GetAllForList(); // display-only: skips reading+decrypting every fingerprint template
         TotalCount = members.Count;
         ActiveCount = members.Count(m => MemberStatusExtensions.StatusOf(m.ExpiryMillis) == MemberStatus.ACTIVE);
         ExpiringCount = members.Count(m => MemberStatusExtensions.StatusOf(m.ExpiryMillis) == MemberStatus.EXPIRING);

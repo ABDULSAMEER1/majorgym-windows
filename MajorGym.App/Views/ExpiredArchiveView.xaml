@@ -117,8 +117,7 @@
         <!-- List -->
         <TextBlock Grid.Row="4" Text="{Binding EmptyText}" Style="{StaticResource GymBody}" HorizontalAlignment="Center" VerticalAlignment="Center"
                    Visibility="{Binding IsEmpty, Converter={StaticResource BoolToVis}}"/>
-        <ScrollViewer Grid.Row="4" VerticalScrollBarVisibility="Auto">
-            <ItemsControl ItemsSource="{Binding Rows}" Margin="20,0,20,90">
+        <ItemsControl Grid.Row="4" Style="{StaticResource GymVirtualList}" ItemsSource="{Binding Rows}" Padding="20,0,20,90">
                 <ItemsControl.ItemTemplate>
                     <DataTemplate>
                         <Border x:Name="Card" Style="{StaticResource GymCard}" Margin="0,0,0,8" Cursor="Hand"
@@ -156,6 +155,5 @@
                     </DataTemplate>
                 </ItemsControl.ItemTemplate>
             </ItemsControl>
-        </ScrollViewer>
     </Grid>
 </UserControl>

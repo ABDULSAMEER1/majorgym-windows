@@ -77,16 +77,9 @@ public partial class App : System.Windows.Application
 
         Nav = new Navigation.NavigationViewModel(Repository, PhotoStore, KioskLoop);
 
-        // 30-Day Expired Member Archive sweep — see Repository.ArchiveExpiredMembersOnce's
-        // own doc comment for the platform-adaptation this represents (no periodic
-        // scheduler exists in this Windows foundation yet).
-        try { Repository.ArchiveExpiredMembersOnce(PhotoStore); }
-        catch (Exception ex) { System.Diagnostics.Trace.TraceError($"[App] Expired-member archive sweep failed: {ex.Message}"); }
-
-        // Attendance retention (Android AttendanceRetentionWorker: daily, deletes attendance older than
-        // 4 months). No scheduler exists on Windows, so it runs once per app start like the sweep above.
-        try { Repository.CleanupOldAttendance(); }
-        catch (Exception ex) { System.Diagnostics.Trace.TraceError($"[App] Attendance retention cleanup failed: {ex.Message}"); }
+        // The 30-day expired-member archive sweep and the attendance retention cleanup used to run HERE, before any
+        // window existed, so every start waited for them. They now run right after the main window is on screen
+        // (see RunDeferredMaintenance) - same work, same once-per-start cadence, just not in the way of opening.
 
         if (File.Exists(StartupVideoPath))
         {
@@ -111,8 +104,33 @@ public partial class App : System.Windows.Application
         ShutdownMode = ShutdownMode.OnMainWindowClose;
         main.Show();
 
+        // Housekeeping after the window is visible, once the UI has gone idle (they still use the UI-thread-owned
+        // SQLite connection, so they must stay on this thread - but no longer delay the first screen).
+        Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.ApplicationIdle, new Action(RunDeferredMaintenance));
+
         KioskLoop.RequestStart(); // runs continuously in the background for the app's whole lifetime from here on
         KioskLoop.StartRetryMonitor(); // Android parity: re-checks every 3 s and (re)starts the loop when a scanner is present
+    }
+
+    /// <summary>30-Day Expired Member Archive sweep + attendance retention (Android: daily workers; no scheduler exists on
+    /// Windows, so once per app start - see Repository.ArchiveExpiredMembersOnce's doc comment).</summary>
+    private void RunDeferredMaintenance()
+    {
+        var archivedAny = false;
+        try { archivedAny = Repository.ArchiveExpiredMembersOnce(PhotoStore).Count > 0; }
+        catch (Exception ex) { System.Diagnostics.Trace.TraceError($"[App] Expired-member archive sweep failed: {ex.Message}"); }
+
+        // Attendance retention (Android AttendanceRetentionWorker: deletes attendance older than 4 months).
+        try { Repository.CleanupOldAttendance(); }
+        catch (Exception ex) { System.Diagnostics.Trace.TraceError($"[App] Attendance retention cleanup failed: {ex.Message}"); }
+
+        // Members archived by the sweep have just disappeared from the member list: if a read-only list screen was built a
+        // moment earlier (the Dashboard is the first screen), rebuild it so its counts never show stale members. Screens
+        // with input (forms, profile, renewal...) are never rebuilt, so nothing the user is typing can be lost.
+        if (archivedAny && Nav.Current is Navigation.Screen.Dashboard or Navigation.Screen.Members or Navigation.Screen.TotalMembers
+                or Navigation.Screen.ActiveMembers or Navigation.Screen.ExpiringMembers or Navigation.Screen.ExpiredMembers
+                or Navigation.Screen.DueMembers or Navigation.Screen.ExpiredArchive)
+            Nav.NavigateTo(Nav.Current);
     }
 
     protected override void OnExit(ExitEventArgs e)

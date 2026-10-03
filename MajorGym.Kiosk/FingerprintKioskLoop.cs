@@ -40,14 +40,12 @@ namespace MajorGym.Kiosk;
 ///    this class exposes no notification logic at all pending that decision, rather than
 ///    inventing a Windows toast-notification behavior nobody has asked for yet.
 ///  - Android's reactive Room Flow (`repository.observeAll().collect { ... }`) keeps the
-///    enrolled-members cache continuously live. This SQLite-direct-access foundation has
-///    no equivalent reactive query layer (building one is a larger undertaking than
-///    Stage 2's database foundation scope), so the cache is refreshed by periodic re-query
-///    (every <see cref="CacheRefreshIntervalMs"/>) instead of on every single database
-///    write. For a kiosk that runs for hours with occasional new enrollments, this is a
-///    materially equivalent practical behavior (a newly enrolled member becomes
-///    recognizable within one refresh interval rather than instantly) — flagged here as a
-///    deliberate, bounded simplification rather than a silent behavior change.
+///    enrolled-members cache continuously live. SQLite has no push notifications, so
+///    <see cref="Repository.EnrolledFingerprintsChanged"/> plays that role: the repository raises it whenever a
+///    fingerprint is added, replaced or removed (or a member is deleted/archived, a backup restored, a sync batch
+///    applied) and this loop reloads its in-memory list once, within one capture slice. No timer re-queries the
+///    database, so there is no periodic pause, and a newly enrolled finger is recognised straight away. A slow
+///    safety-net reload (<see cref="SafetyRefreshMs"/>) only covers a notification that could ever be missed.
 ///  - ScannerHub's device-gone detection (poll + reactive error-code check, since this SDK
 ///    has no attach/detach event — see ScannerHub.cs) is fed here via
 ///    <see cref="ScannerHub.ReportOperationError"/> whenever a capture returns an error
@@ -62,7 +60,8 @@ public sealed class FingerprintKioskLoop
     private const int ListenSliceMs = 4000;
     private const int MaxConsecutiveCaptureErrors = 5;
     private const int CaptureErrorRetryDelayMs = 500;
-    private const int CacheRefreshIntervalMs = 10_000; // see "PLATFORM ADAPTATIONS" above
+    private const int SafetyRefreshMs = 300_000;      // 5 min safety net only; normal reloads are change-driven
+    private const int RefreshRetryThrottleMs = 5_000; // after a failed reload, don't retry more often than this
 
     private readonly Repository _repository;
     /// <summary>The app's single SQLite connection is owned by the WPF UI thread (see WpfDbThread). Every
@@ -90,6 +89,9 @@ public sealed class FingerprintKioskLoop
     private Task? _loopTask;
 
     private volatile List<Member> _enrolledCache = new();
+    private volatile bool _cacheDirty;                // set by Repository.EnrolledFingerprintsChanged
+    private long _cacheLoadedAtTicks;                 // Environment.TickCount64 of the last successful reload
+    private long _cacheAttemptAtTicks;                // ... and of the last attempt (success or failure)
 
     public KioskBus Bus { get; } = new();
 
@@ -107,6 +109,8 @@ public sealed class FingerprintKioskLoop
         _ownership = ownership;
         _audioPlayer = audioPlayer;
         _audioAssetsDirectory = audioAssetsDirectory;
+        // Android's observeAll().collect equivalent: just flag the cache stale; the loop reloads it at its next turn.
+        _repository.EnrolledFingerprintsChanged += () => _cacheDirty = true;
     }
 
     /// <summary>Ask the loop to try opening the scanner and, if found, start listening.
@@ -212,9 +216,6 @@ public sealed class FingerprintKioskLoop
             // normally, hits an SDK error, or is cancelled (Android doc comment, preserved).
             _ownership.Acquire(ScannerOwnership.Owner.KIOSK);
 
-            using var cacheCts = CancellationTokenSource.CreateLinkedTokenSource(token);
-            var cacheTask = RefreshEnrolledCacheLoopAsync(cacheCts.Token);
-
             try
             {
                 await RefreshEnrolledCacheOnceAsync().ConfigureAwait(false); // seed the cache before the first capture
@@ -222,12 +223,15 @@ public sealed class FingerprintKioskLoop
                 var consecutiveErrors = 0;
                 while (!token.IsCancellationRequested)
                 {
+                    await RefreshEnrolledCacheIfNeededAsync().ConfigureAwait(false); // change-driven, not a timer
                     var capture = fp.CaptureTemplate(timeoutMs: ListenSliceMs);
                     switch (capture)
                     {
                         case FingerprintScanner.CaptureResult.Success success:
                         {
                             consecutiveErrors = 0;
+                            // A change may have landed while this capture was waiting for a finger - match against fresh data.
+                            await RefreshEnrolledCacheIfNeededAsync().ConfigureAwait(false);
                             Member? matched = null;
                             foreach (var m in _enrolledCache)
                             {
@@ -328,9 +332,6 @@ public sealed class FingerprintKioskLoop
             }
             finally
             {
-                cacheCts.Cancel();
-                try { await cacheTask; } catch { /* ignore */ }
-
                 // This finally block does NOT close the native device — see ScannerHub's
                 // doc for why. All that happens here is: stop OUR polling loop, hand
                 // turn-taking ownership back. The physical connection stays open and
@@ -346,32 +347,36 @@ public sealed class FingerprintKioskLoop
         }
     }
 
+    /// <summary>Reloads the enrolled list only if a fingerprint change was signalled (or the slow safety net is due).</summary>
+    private async Task RefreshEnrolledCacheIfNeededAsync()
+    {
+        var now = Environment.TickCount64;
+        var due = (_cacheDirty && now - Interlocked.Read(ref _cacheAttemptAtTicks) >= RefreshRetryThrottleMs)
+               || now - Interlocked.Read(ref _cacheLoadedAtTicks) >= SafetyRefreshMs;
+        if (due) await RefreshEnrolledCacheOnceAsync().ConfigureAwait(false);
+    }
+
+    /// <summary>Two steps, so the UI never waits on the slow part: (1) a quick read of the enrolled rows on the UI thread
+    /// (it owns the SQLite connection), (2) the per-member DPAPI decryption on a worker thread.</summary>
     private async Task RefreshEnrolledCacheOnceAsync()
     {
+        Interlocked.Exchange(ref _cacheAttemptAtTicks, Environment.TickCount64);
+        _cacheDirty = false; // cleared BEFORE reading: a change that lands mid-reload re-flags it and triggers another pass
         try
         {
-            _enrolledCache = await _dbThread.RunAsync(() => _repository.GetAll()
+            var raw = await _dbThread.RunAsync(() => _repository.GetEnrolledEncrypted()).ConfigureAwait(false);
+            var decrypted = await Task.Run(() => raw
+                .Select(Repository.DecryptTemplateForApp)
                 .Where(m => m.FingerprintTemplate is not null)
-                .OrderByDescending(m => m.LastAttendanceMillis ?? 0L)
                 .ToList()).ConfigureAwait(false);
+            _enrolledCache = decrypted;
+            Interlocked.Exchange(ref _cacheLoadedAtTicks, Environment.TickCount64);
         }
         catch (Exception e)
         {
+            _cacheDirty = true; // keep the old list in use and try again after the throttle
             Trace.TraceError($"[FingerprintKioskLoop] Failed to refresh enrolled cache: {e.Message}");
         }
-    }
-
-    private async Task RefreshEnrolledCacheLoopAsync(CancellationToken token)
-    {
-        try
-        {
-            while (!token.IsCancellationRequested)
-            {
-                await Task.Delay(CacheRefreshIntervalMs, token).ConfigureAwait(false);
-                await RefreshEnrolledCacheOnceAsync().ConfigureAwait(false);
-            }
-        }
-        catch (OperationCanceledException) { /* expected on stop */ }
     }
 
     /// <summary>Non-blocking stop for application exit: cancels the loop without awaiting it. Awaiting from the

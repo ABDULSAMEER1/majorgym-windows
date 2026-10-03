@@ -1,4 +1,3 @@
-using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Windows.Input;
 using MajorGym.App.Navigation;
@@ -44,9 +43,10 @@ public sealed class ExpiredArchiveViewModel : INotifyPropertyChanged
     private readonly NavigationViewModel _nav;
     private readonly List<ArchivedMemberRow> _all = new();
     private ArchivedMemberRow? _anchor;
+    private readonly Debouncer _filterDebounce;
 
     /// <summary>The rows currently shown (after the search filter).</summary>
-    public ObservableCollection<ArchivedMemberRow> Rows { get; } = new();
+    public BulkObservableCollection<ArchivedMemberRow> Rows { get; } = new();
 
     public bool IsEmpty => Rows.Count == 0;
     public string EmptyText => _all.Count == 0 ? "No archived members." : "No archived members match your search.";
@@ -55,7 +55,8 @@ public sealed class ExpiredArchiveViewModel : INotifyPropertyChanged
     public string SearchText
     {
         get => _searchText;
-        set { _searchText = value ?? ""; OnPropertyChanged(); ApplyFilter(); }
+        // The box updates instantly; the list re-filters ~150 ms after the user stops typing/deleting.
+        set { if (_searchText == (value ?? "")) return; _searchText = value ?? ""; OnPropertyChanged(); _filterDebounce.Trigger(); }
     }
 
     private string _selectCountText = "";
@@ -99,12 +100,13 @@ public sealed class ExpiredArchiveViewModel : INotifyPropertyChanged
     {
         _repository = repository;
         _nav = nav;
+        _filterDebounce = new Debouncer(ApplyFilter);
 
         BackCommand = new RelayCommand(() => _nav.NavigateTo(new Screen.Dashboard()));
         SelectFirstNCommand = new RelayCommand(SelectFirstN);
         SelectAllCommand = new RelayCommand(SelectAllShown);
         ClearSelectionCommand = new RelayCommand(ClearSelection);
-        RequestDeleteCommand = new RelayCommand(() => { if (HasSelection) IsConfirmingDelete = true; });
+        RequestDeleteCommand = new RelayCommand(() => { _filterDebounce.Flush(); if (HasSelection) IsConfirmingDelete = true; });
         CancelDeleteCommand = new RelayCommand(() => IsConfirmingDelete = false);
         ConfirmDeleteCommand = new RelayCommand(DeleteSelected);
 
@@ -136,13 +138,13 @@ public sealed class ExpiredArchiveViewModel : INotifyPropertyChanged
                                   || r.Phone.Contains(q, StringComparison.OrdinalIgnoreCase)
                                   || r.LastPlan.Contains(q, StringComparison.OrdinalIgnoreCase));
         var list = shown.ToList();
+        var visible = new HashSet<ArchivedMemberRow>(list);
 
         // Never leave a member selected while hidden by the search: a bulk delete must only touch what is on screen.
-        foreach (var r in _all) if (!list.Contains(r)) r.IsSelected = false;
-        if (_anchor is not null && !list.Contains(_anchor)) _anchor = null;
+        foreach (var r in _all) if (!visible.Contains(r)) r.IsSelected = false;
+        if (_anchor is not null && !visible.Contains(_anchor)) _anchor = null;
 
-        Rows.Clear();
-        foreach (var r in list) Rows.Add(r);
+        Rows.ReplaceAll(list);
         IsConfirmingDelete = false;
         RaiseSelectionChanged();
         OnPropertyChanged(nameof(IsEmpty));
@@ -202,6 +204,7 @@ public sealed class ExpiredArchiveViewModel : INotifyPropertyChanged
 
     private void SelectFirstN()
     {
+        _filterDebounce.Flush(); // act on what the search currently shows, even if the user clicked within 150 ms of typing
         Notice = null;
         if (!int.TryParse(SelectCountText, out var n) || n <= 0)
         {
@@ -218,6 +221,7 @@ public sealed class ExpiredArchiveViewModel : INotifyPropertyChanged
 
     private void SelectAllShown()
     {
+        _filterDebounce.Flush();
         Notice = null;
         foreach (var r in Rows) r.IsSelected = true;
         _anchor = Rows.Count > 0 ? Rows[0] : null;
@@ -234,6 +238,7 @@ public sealed class ExpiredArchiveViewModel : INotifyPropertyChanged
 
     private void DeleteSelected()
     {
+        _filterDebounce.Flush();
         var ids = Rows.Where(r => r.IsSelected).Select(r => r.Archived.OriginalMemberId).ToList();
         IsConfirmingDelete = false;
         if (ids.Count == 0) return;

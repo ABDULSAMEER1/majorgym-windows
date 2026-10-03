@@ -10,7 +10,15 @@
     <RootNamespace>MajorGym.App</RootNamespace>
     <AssemblyName>MajorGym</AssemblyName>
     <ApplicationIcon></ApplicationIcon>
+    <!-- Ship only English UI resources from NuGet dependencies (smaller install, fewer files to load). -->
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
   </PropertyGroup>
+
+  <!-- Startup speed: the installer build publishes with ReadyToRun (precompiled code). SecuGen's wrapper is a mixed-mode
+       C++/CLI assembly that cannot be precompiled, so it is excluded from that step. Ignored by normal builds. -->
+  <ItemGroup>
+    <PublishReadyToRunExclude Include="SecuGen.FDxSDKPro.DotNet.Windows.dll" />
+  </ItemGroup>
 
   <ItemGroup>
     <!-- Exo 2 header font, copied from the Android app's res/font (SIL OFL 1.1 — license text

@@ -8,13 +8,13 @@ namespace MajorGym.App.Controls;
 public partial class StatusRing : UserControl
 {
     public static readonly DependencyProperty PhotoPathProperty = DependencyProperty.Register(
-        nameof(PhotoPath), typeof(string), typeof(StatusRing), new PropertyMetadata(null, (d, _) => ((StatusRing)d).Refresh()));
+        nameof(PhotoPath), typeof(string), typeof(StatusRing), new PropertyMetadata(null, (d, _) => ((StatusRing)d).ScheduleRefresh()));
     public static readonly DependencyProperty MemberNameProperty = DependencyProperty.Register(
-        nameof(MemberName), typeof(string), typeof(StatusRing), new PropertyMetadata("", (d, _) => ((StatusRing)d).Refresh()));
+        nameof(MemberName), typeof(string), typeof(StatusRing), new PropertyMetadata("", (d, _) => ((StatusRing)d).ScheduleRefresh()));
     public static readonly DependencyProperty StatusProperty = DependencyProperty.Register(
-        nameof(Status), typeof(MemberStatus), typeof(StatusRing), new PropertyMetadata(MemberStatus.ACTIVE, (d, _) => ((StatusRing)d).Refresh()));
+        nameof(Status), typeof(MemberStatus), typeof(StatusRing), new PropertyMetadata(MemberStatus.ACTIVE, (d, _) => ((StatusRing)d).ScheduleRefresh()));
     public static readonly DependencyProperty RingSizeProperty = DependencyProperty.Register(
-        nameof(RingSize), typeof(double), typeof(StatusRing), new PropertyMetadata(56.0, (d, _) => ((StatusRing)d).Refresh()));
+        nameof(RingSize), typeof(double), typeof(StatusRing), new PropertyMetadata(56.0, (d, _) => ((StatusRing)d).ScheduleRefresh()));
 
     public string? PhotoPath { get => (string?)GetValue(PhotoPathProperty); set => SetValue(PhotoPathProperty, value); }
     public string MemberName { get => (string)GetValue(MemberNameProperty); set => SetValue(MemberNameProperty, value); }
@@ -24,7 +24,39 @@ public partial class StatusRing : UserControl
     public StatusRing()
     {
         InitializeComponent();
-        Refresh();
+        ScheduleRefresh();
+    }
+
+    // A ring gets 3-4 property sets in a row when a list row is created or recycled (photo, name, status, size). Each
+    // used to rebuild the ring - re-loading the photo and allocating a new glow effect every time. Now they only mark
+    // the ring dirty and ONE refresh runs right after (DataBind priority = before the next frame is drawn, so nothing
+    // stale is ever visible).
+    private bool _refreshQueued;
+    private void ScheduleRefresh()
+    {
+        if (_refreshQueued) return;
+        _refreshQueued = true;
+        Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.DataBind, new Action(() =>
+        {
+            _refreshQueued = false;
+            Refresh();
+        }));
+    }
+
+    // One shared, frozen glow per status colour instead of a new DropShadowEffect per ring per refresh.
+    private static readonly Dictionary<MemberStatus, System.Windows.Media.Effects.DropShadowEffect> GlowCache = new();
+    private static System.Windows.Media.Effects.DropShadowEffect GlowFor(MemberStatus status)
+    {
+        if (!GlowCache.TryGetValue(status, out var glow))
+        {
+            glow = new System.Windows.Media.Effects.DropShadowEffect
+            {
+                Color = ColorOf(status), BlurRadius = 12, ShadowDepth = 0, Opacity = 0.30
+            };
+            glow.Freeze();
+            GlowCache[status] = glow;
+        }
+        return glow;
     }
 
     /// <summary>Android's status colour mapping: ACTIVE green, EXPIRING amber, EXPIRED red.</summary>
@@ -42,10 +74,7 @@ public partial class StatusRing : UserControl
         Height = RingSize;
         var color = ColorOf(Status);
         Ring.Stroke = new SolidColorBrush(color);
-        Root.Effect = new System.Windows.Media.Effects.DropShadowEffect
-        {
-            Color = color, BlurRadius = 12, ShadowDepth = 0, Opacity = 0.30
-        };
+        Root.Effect = GlowFor(Status);
 
         var image = BitmapImageUtils.LoadFromFile(PhotoPath, (int)Math.Ceiling(RingSize * 2));
         if (image is not null)

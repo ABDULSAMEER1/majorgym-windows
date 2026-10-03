@@ -43,6 +43,59 @@ public static class BitmapImageUtils
     /// </summary>
     public static BitmapImage? LoadFromFile(string? path, int decodePixelWidth = 0)
     {
+        if (string.IsNullOrWhiteSpace(path)) return null;
+        try
+        {
+            var fullPath = Path.GetFullPath(path);
+            var info = new FileInfo(fullPath);
+            if (!info.Exists) return null;
+
+            // In-memory cache of already-decoded (frozen) photos. The key includes the file's last-write time and size, so
+            // replacing a member's photo (PhotoStore rewrites the SAME path) automatically produces a fresh decode - the
+            // "stale picture after replace" problem this method exists to avoid stays solved. Scrolling a list, filtering it
+            // while searching, or returning to a screen no longer re-reads and re-decodes every photo from disk.
+            var key = (fullPath, decodePixelWidth, info.LastWriteTimeUtc.Ticks, info.Length);
+            lock (CacheLock)
+            {
+                if (Cache.TryGetValue(key, out var hit))
+                {
+                    LruOrder.Remove(hit.Node);
+                    LruOrder.AddFirst(hit.Node);
+                    return hit.Image;
+                }
+            }
+            var image = DecodeFromFile(fullPath, decodePixelWidth);
+            if (image is null) return null;
+            lock (CacheLock)
+            {
+                if (!Cache.ContainsKey(key))
+                {
+                    var node = new LinkedListNode<(string, int, long, long)>(key);
+                    LruOrder.AddFirst(node);
+                    Cache[key] = (image, node);
+                    while (Cache.Count > MaxCachedPhotos)
+                    {
+                        var last = LruOrder.Last!;
+                        LruOrder.RemoveLast();
+                        Cache.Remove(last.Value);
+                    }
+                }
+            }
+            return image;
+        }
+        catch (Exception ex) when (ex is IOException or NotSupportedException or InvalidOperationException or UnauthorizedAccessException or ArgumentException)
+        {
+            return null;
+        }
+    }
+
+    private const int MaxCachedPhotos = 400; // 400 x ~40 KB thumbnails = ~16 MB at most
+    private static readonly object CacheLock = new();
+    private static readonly Dictionary<(string, int, long, long), (BitmapImage Image, LinkedListNode<(string, int, long, long)> Node)> Cache = new();
+    private static readonly LinkedList<(string, int, long, long)> LruOrder = new();
+
+    private static BitmapImage? DecodeFromFile(string path, int decodePixelWidth)
+    {
         if (string.IsNullOrWhiteSpace(path) || !File.Exists(path)) return null;
         try
         {

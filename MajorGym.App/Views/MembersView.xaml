@@ -9,14 +9,12 @@
         <TextBox DockPanel.Dock="Top" Style="{StaticResource GymTextBox}" Margin="0,0,0,14"
                  Text="{Binding SearchText, UpdateSourceTrigger=PropertyChanged}"
                  Tag="Search by name, phone or ID proof"/>
-        <ScrollViewer VerticalScrollBarVisibility="Auto">
-            <ItemsControl ItemsSource="{Binding Rows}" Margin="0,0,0,90">
+        <ItemsControl Style="{StaticResource GymVirtualList}" ItemsSource="{Binding Rows}" Padding="0,0,0,90">
                 <ItemsControl.ItemTemplate>
                     <DataTemplate>
                         <ctl:MemberRowView Margin="0,0,0,10"/>
                     </DataTemplate>
                 </ItemsControl.ItemTemplate>
             </ItemsControl>
-        </ScrollViewer>
     </DockPanel>
 </UserControl>

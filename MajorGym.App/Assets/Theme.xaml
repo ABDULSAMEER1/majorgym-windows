@@ -254,6 +254,33 @@
         </Setter>
     </Style>
 
+    <!-- GymVirtualList: a scrolling list that only builds the rows currently on screen (UI virtualization, recycled
+         containers, smooth pixel scrolling). Replaces "ScrollViewer + ItemsControl", which created a full card for EVERY
+         row up front. Set Padding on the list for space around/below the rows (e.g. 0,0,0,90 to clear the bottom dock);
+         unlike ScrollViewer.Padding it never shrinks the scrollable viewport. -->
+    <Style x:Key="GymVirtualList" TargetType="ItemsControl">
+        <Setter Property="VirtualizingPanel.IsVirtualizing" Value="True"/>
+        <Setter Property="VirtualizingPanel.VirtualizationMode" Value="Recycling"/>
+        <Setter Property="VirtualizingPanel.ScrollUnit" Value="Pixel"/>
+        <Setter Property="ScrollViewer.CanContentScroll" Value="True"/>
+        <Setter Property="ItemsPanel">
+            <Setter.Value>
+                <ItemsPanelTemplate>
+                    <VirtualizingStackPanel/>
+                </ItemsPanelTemplate>
+            </Setter.Value>
+        </Setter>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ItemsControl">
+                    <ScrollViewer Focusable="False" CanContentScroll="True" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                        <ItemsPresenter Margin="{TemplateBinding Padding}"/>
+                    </ScrollViewer>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
     <!-- GymBackButton: the dedicated back button used at the top-left of every sub-screen, beside the page heading.
          A visible 40x40 rounded chip (not a bare glyph) so it is obvious and easy to hit with a mouse. -->
     <Style x:Key="GymBackButton" TargetType="Button">
