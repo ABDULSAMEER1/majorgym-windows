@@ -254,6 +254,42 @@
         </Setter>
     </Style>
 
+    <!-- GymBackButton: the dedicated back button used at the top-left of every sub-screen, beside the page heading.
+         A visible 40x40 rounded chip (not a bare glyph) so it is obvious and easy to hit with a mouse. -->
+    <Style x:Key="GymBackButton" TargetType="Button">
+        <Setter Property="Width" Value="40"/>
+        <Setter Property="Height" Value="40"/>
+        <Setter Property="Margin" Value="0,0,12,0"/>
+        <Setter Property="VerticalAlignment" Value="Center"/>
+        <Setter Property="Foreground" Value="{StaticResource GymText}"/>
+        <Setter Property="Cursor" Value="Hand"/>
+        <Setter Property="ToolTip" Value="Back"/>
+        <Setter Property="AutomationProperties.Name" Value="Back"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Button">
+                    <Border x:Name="Bd" Background="{StaticResource GymSurfaceCard}" BorderBrush="{StaticResource GymBorder}"
+                            BorderThickness="1" CornerRadius="12">
+                        <TextBlock Text="&#xE72B;" FontFamily="Segoe MDL2 Assets" FontSize="18" HorizontalAlignment="Center" VerticalAlignment="Center"
+                                   Foreground="{TemplateBinding Foreground}"/>
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Bd" Property="BorderBrush" Value="{StaticResource GymAccent}"/>
+                            <Setter TargetName="Bd" Property="Background" Value="{StaticResource GymSurface2}"/>
+                        </Trigger>
+                        <Trigger Property="IsKeyboardFocused" Value="True">
+                            <Setter TargetName="Bd" Property="BorderBrush" Value="{StaticResource GymAccent}"/>
+                        </Trigger>
+                        <Trigger Property="IsPressed" Value="True">
+                            <Setter TargetName="Bd" Property="Background" Value="{StaticResource GymSurface3}"/>
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
     <!-- Outlined button ("Replace"/"Delete" under the ID proof photo) -->
     <Style x:Key="GymOutlinedButton" TargetType="Button">
         <Setter Property="Foreground" Value="{StaticResource GymText}"/>

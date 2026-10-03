@@ -3,8 +3,10 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
     <ScrollViewer Background="{StaticResource GymBg}">
         <StackPanel Margin="20">
-            <Button Content="&#8592; Back" Command="{Binding BackCommand}" HorizontalAlignment="Left"
-                    Background="Transparent" BorderThickness="0" Foreground="{StaticResource GymTextMuted}" Margin="0,0,0,12"/>
+            <DockPanel Margin="0,0,0,16">
+                <Button DockPanel.Dock="Left" Style="{StaticResource GymBackButton}" Command="{Binding BackCommand}"/>
+                <TextBlock Text="ARCHIVED MEMBER" Style="{StaticResource GymHeaderText}" FontSize="18"/>
+            </DockPanel>
             <TextBlock Text="{Binding Archived.Name}" Style="{StaticResource GymHeading}" Margin="0,0,0,4"/>
             <TextBlock Text="{Binding Archived.Phone}" Style="{StaticResource GymBody}" Margin="0,0,0,16"/>
 

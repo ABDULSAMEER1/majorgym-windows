@@ -128,9 +128,13 @@ public sealed class NavigationViewModel : INotifyPropertyChanged
     public void NavigateTo(Screen screen)
     {
         var resolved = Resolve(screen);
+        var previous = _currentViewModel;
         _currentViewModel = BuildViewModel(resolved);
         Current = resolved;
         OnPropertyChanged(nameof(CurrentViewModel));
+        // A screen that holds a resource (the Enroll Fingerprint screen holds the scanner between its two scans)
+        // releases it the moment it is left — Android's DisposableEffect.onDispose.
+        (previous as IDisposable)?.Dispose();
     }
 
     public event PropertyChangedEventHandler? PropertyChanged;

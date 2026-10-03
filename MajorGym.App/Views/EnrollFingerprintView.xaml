@@ -12,7 +12,34 @@
 
             <Border Style="{StaticResource GymCard}">
                 <StackPanel HorizontalAlignment="Center">
-                    <Ellipse Width="96" Height="96" StrokeThickness="3" Margin="0,0,0,16" Stroke="{StaticResource GymAccent}"/>
+                    <Ellipse Width="96" Height="96" StrokeThickness="3" Margin="0,0,0,12" Stroke="{StaticResource GymAccent}"/>
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,0,0,8">
+                        <Ellipse Width="12" Height="12" Margin="0,0,8,0" StrokeThickness="2" Stroke="{StaticResource GymAccent}">
+                            <Ellipse.Style>
+                                <Style TargetType="Ellipse">
+                                    <Setter Property="Fill" Value="Transparent"/>
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding Scan1Done}" Value="True">
+                                            <Setter Property="Fill" Value="{StaticResource GymSuccess}"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </Ellipse.Style>
+                        </Ellipse>
+                        <Ellipse Width="12" Height="12" Margin="0,0,0,0" StrokeThickness="2" Stroke="{StaticResource GymAccent}">
+                            <Ellipse.Style>
+                                <Style TargetType="Ellipse">
+                                    <Setter Property="Fill" Value="Transparent"/>
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding Scan2Done}" Value="True">
+                                            <Setter Property="Fill" Value="{StaticResource GymSuccess}"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </Ellipse.Style>
+                        </Ellipse>
+                    </StackPanel>
+                    <TextBlock Text="{Binding StepText}" Style="{StaticResource GymBody}" HorizontalAlignment="Center" Margin="0,0,0,12"/>
                     <TextBlock Text="{Binding StatusText}" TextWrapping="Wrap" TextAlignment="Center" HorizontalAlignment="Center" MaxWidth="420">
                         <TextBlock.Style>
                             <Style TargetType="TextBlock">
@@ -31,17 +58,17 @@
                 </StackPanel>
             </Border>
 
-            <Button Content="Start Enrollment" Command="{Binding StartCommand}" Style="{StaticResource GymPrimaryButton}"
-                    Margin="0,20,0,0" Visibility="{Binding IsBusy, Converter={StaticResource InverseBoolToVis}}"/>
+            <Button Content="{Binding ScanButtonText}" Command="{Binding StartCommand}" Style="{StaticResource GymPrimaryButton}"
+                    Margin="0,20,0,0" Visibility="{Binding ShowScanButtons, Converter={StaticResource BoolToVis}}"/>
             <Button Content="Check Scanner" Command="{Binding CheckScannerCommand}" Background="Transparent" BorderThickness="1"
                     BorderBrush="{StaticResource GymBorder}" Foreground="{StaticResource GymTextMuted}" Padding="16,10" Margin="0,12,0,0"
-                    Visibility="{Binding IsBusy, Converter={StaticResource InverseBoolToVis}}"/>
+                    Visibility="{Binding ShowScanButtons, Converter={StaticResource BoolToVis}}"/>
             <Button Content="Install Scanner Driver" Command="{Binding InstallDriverCommand}" Background="Transparent" BorderThickness="1"
                     BorderBrush="{StaticResource GymAccent}" Foreground="{StaticResource GymAccent}" Padding="16,10" Margin="0,12,0,0"
                     Visibility="{Binding NeedsDriver, Converter={StaticResource BoolToVis}}"/>
             <Button Content="Cancel" Command="{Binding CancelCommand}" Background="Transparent" BorderThickness="1"
                     BorderBrush="{StaticResource GymBorder}" Foreground="{StaticResource GymTextMuted}" Padding="16,10" Margin="0,12,0,0"
-                    Visibility="{Binding IsBusy, Converter={StaticResource BoolToVis}}"/>
+                    Visibility="{Binding ShowCancel, Converter={StaticResource BoolToVis}}"/>
             <Button Content="Done" Command="{Binding DoneCommand}" Style="{StaticResource GymPrimaryButton}" Margin="0,20,0,0"
                     Visibility="{Binding IsSuccess, Converter={StaticResource BoolToVis}}"/>
         </StackPanel>

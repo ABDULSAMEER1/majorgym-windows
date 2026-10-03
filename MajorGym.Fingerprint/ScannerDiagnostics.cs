@@ -109,7 +109,7 @@ public static class ScannerDiagnostics
             lines.Add(!vc ? "Next: install the Visual C++ runtime (Install Scanner Driver does this)."
                 : modules.Count == 0 ? "Next: press Install Scanner Driver, then re-plug the scanner."
                 : usb == false ? "Next: plug the scanner in (try another USB 2.0 port)."
-                : "Everything needed is present. Press Start Enrollment.");
+                : "Everything needed is present. Press Start Scan.");
             return string.Join(Environment.NewLine, lines);
         }
         catch (Exception e)

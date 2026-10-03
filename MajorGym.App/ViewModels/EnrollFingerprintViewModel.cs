@@ -34,7 +34,7 @@ namespace MajorGym.App.ViewModels;
 ///  - cross-member duplicate detection against every other member's already-enrolled
 ///    template before saving.
 /// </summary>
-public sealed class EnrollFingerprintViewModel : INotifyPropertyChanged
+public sealed class EnrollFingerprintViewModel : INotifyPropertyChanged, IDisposable
 {
     // Android parity (FingerprintScreens.kt): OPEN_MAX_ATTEMPTS = 3 with OPEN_RETRY_DELAY_MS * attempt
     // (400 ms, then 800 ms) — i.e. two retries after the first attempt; RELEASE_WAIT_MS = 7000;
@@ -53,14 +53,43 @@ public sealed class EnrollFingerprintViewModel : INotifyPropertyChanged
     private string _statusText = "Ready to enroll a fingerprint.";
     public string StatusText { get => _statusText; private set { _statusText = value; OnPropertyChanged(); } }
 
+    // Android parity (FingerprintScreens.kt): enrollment is TWO separate scans of the same finger. Scan 1 is held in
+    // memory (firstScan); the user then scans the same finger again to confirm and the two are matched against each
+    // other before anything is saved. The scanner session/ownership stays held between the two scans (Android's
+    // `sessionAcquired`) so the kiosk loop cannot grab the scanner or record an attendance from the confirm scan.
+    private byte[]? _firstScan;
+    private bool _sessionAcquired;
+
     private bool _isBusy;
-    public bool IsBusy { get => _isBusy; private set { _isBusy = value; OnPropertyChanged(); OnPropertyChanged(nameof(CanStart)); } }
+    public bool IsBusy
+    {
+        get => _isBusy;
+        private set { _isBusy = value; OnPropertyChanged(); OnPropertyChanged(nameof(CanStart)); OnPropertyChanged(nameof(ShowScanButtons)); }
+    }
+
+    /// <summary>Android's button text: "Start Scan" for the first scan, "Scan Again to Confirm" for the second.</summary>
+    public string ScanButtonText => _firstScan is null ? "Start Scan" : "Scan Again to Confirm";
+    public string StepText => IsSuccess ? "Both scans matched" : _firstScan is null ? "Step 1 of 2 - first scan" : "Step 2 of 2 - confirm scan";
+    public bool Scan1Done => _firstScan is not null || IsSuccess;
+    public bool Scan2Done => IsSuccess;
+    public bool ShowScanButtons => !IsBusy && !IsSuccess;
+    public bool ShowCancel => !IsSuccess;
+
+    private void RaiseStepChanged()
+    {
+        OnPropertyChanged(nameof(ScanButtonText));
+        OnPropertyChanged(nameof(StepText));
+        OnPropertyChanged(nameof(Scan1Done));
+        OnPropertyChanged(nameof(Scan2Done));
+        OnPropertyChanged(nameof(ShowScanButtons));
+        OnPropertyChanged(nameof(ShowCancel));
+    }
 
     private bool _isError;
     public bool IsError { get => _isError; private set { _isError = value; OnPropertyChanged(); } }
 
     private bool _isSuccess;
-    public bool IsSuccess { get => _isSuccess; private set { _isSuccess = value; OnPropertyChanged(); } }
+    public bool IsSuccess { get => _isSuccess; private set { _isSuccess = value; OnPropertyChanged(); RaiseStepChanged(); } }
 
     private bool _needsDriver;
     /// <summary>True when the SecuGen SDK/driver could not start — shows the "Install Scanner Driver" button.</summary>
@@ -82,8 +111,8 @@ public sealed class EnrollFingerprintViewModel : INotifyPropertyChanged
         Member = member;
         _returnTo = returnTo;
 
-        StartCommand = new RelayCommand(() => _ = RunEnrollmentAsync(), () => CanStart);
-        CancelCommand = new RelayCommand(Cancel, () => IsBusy);
+        StartCommand = new RelayCommand(() => _ = RunScanAsync(), () => CanStart);
+        CancelCommand = new RelayCommand(Cancel);
         DoneCommand = new RelayCommand(() => _nav.NavigateTo(_returnTo));
         InstallDriverCommand = new RelayCommand(() => _ = InstallDriverAsync());
         CheckScannerCommand = new RelayCommand(() => _ = CheckScannerAsync(), () => CanStart);
@@ -117,7 +146,7 @@ public sealed class EnrollFingerprintViewModel : INotifyPropertyChanged
             StatusText = "Installing the SecuGen scanner driver... approve the Windows prompt and finish the installer.";
             await RunElevatedAsync(sg, "");
             NeedsDriver = false;
-            StatusText = "Driver installed. Unplug and re-plug the scanner (restart the PC if asked), then press Start Enrollment.";
+            StatusText = "Driver installed. Unplug and re-plug the scanner (restart the PC if asked), then press Start Scan.";
         }
         catch (System.ComponentModel.Win32Exception)
         {
@@ -146,109 +175,168 @@ public sealed class EnrollFingerprintViewModel : INotifyPropertyChanged
         StatusText = await Task.Run(ScannerDiagnostics.BuildReport);
     }
 
+    /// <summary>Android: Cancel always leaves the screen. While a scan is waiting for a finger it first cancels that
+    /// wait (this screen stays so the user can simply tap Scan again); pressing Cancel with nothing running goes back.</summary>
     private void Cancel()
     {
-        _cts?.Cancel();
+        if (IsBusy)
+        {
+            _cts?.Cancel();
+            return;
+        }
+        _nav.NavigateTo(_returnTo); // leaving the screen disposes this ViewModel, which hands the scanner back
     }
 
-    private async Task RunEnrollmentAsync()
+    /// <summary>Hands the scanner back to the background kiosk loop. Safe to call more than once.</summary>
+    private void ReleaseSession()
     {
+        if (!_sessionAcquired) return;
+        _sessionAcquired = false;
+        App.ScannerOwnership.Release(ScannerOwnership.Owner.ENROLLMENT);
+        App.KioskLoop.RequestStart();
+    }
+
+    /// <summary>Called by NavigationViewModel when the user leaves this screen (any way), exactly like the
+    /// DisposableEffect.onDispose in Android's EnrollFingerprintScreen.</summary>
+    public void Dispose()
+    {
+        try { _cts?.Cancel(); } catch (ObjectDisposedException) { }
+        ReleaseSession();
+        // Even if no session was acquired (e.g. only "Check Scanner" was used) make sure the kiosk is running.
+        App.KioskLoop.RequestStart();
+    }
+
+    /// <summary>One scan. Called once for scan 1 and once more for the confirm scan (Android's runScan()).</summary>
+    private async Task RunScanAsync()
+    {
+        if (IsBusy) return;
         IsBusy = true;
         IsError = false;
         IsSuccess = false;
         NeedsDriver = false;
         _cts = new CancellationTokenSource();
         var token = _cts.Token;
-        var ownershipAcquired = false;
 
         try
         {
-            StatusText = "Waiting for the scanner...";
-            await App.KioskLoop.RequestStopAsync();
-
-            var released = await App.ScannerOwnership.AwaitReleasedAsync(AwaitKioskReleaseTimeoutMs);
-            if (!released)
+            // Only the first scan goes through the stop-kiosk / wait-for-release / open dance; the confirm scan
+            // reuses the already-open shared connection and already-held ownership.
+            if (!_sessionAcquired)
             {
-                // Android parity: log and carry on ("trying anyway") rather than failing outright.
-                // Native calls on the shared session are serialized inside FingerprintScanner, and
-                // RequestStopAsync above has already waited for the kiosk loop task to finish.
-                Trace.TraceWarning($"[EnrollFingerprintViewModel] SCANNER_OPEN_FAILED kiosk did not release in time (owner={App.ScannerOwnership.Current}), trying anyway");
-            }
-            token.ThrowIfCancellationRequested();
+                StatusText = "Stopping background scanner...";
+                await App.KioskLoop.RequestStopAsync();
 
-            App.ScannerOwnership.Acquire(ScannerOwnership.Owner.ENROLLMENT);
-            ownershipAcquired = true;
-
-            var openResult = await OpenWithRetriesAsync();
-            token.ThrowIfCancellationRequested();
-            if (openResult is not FingerprintScanner.OpenResult.Success || App.ScannerHub.Current is not { } scanner)
-            {
-                Trace.TraceWarning($"[EnrollFingerprintViewModel] scanner open failed result={openResult.GetType().Name} detail={ScannerDiagnostics.LastFailure ?? "(none)"} owner={App.ScannerOwnership.Current}");
-                NeedsDriver = openResult is FingerprintScanner.OpenResult.SdkUnavailable;
-                Fail(DescribeOpenFailure(openResult));
-                return;
-            }
-
-            StatusText = "Place your finger on the scanner (1 of 2)...";
-            var (first, firstScanner) = await CaptureWithRecoveryAsync(scanner, token);
-            scanner = firstScanner;
-            if (!TryGetTemplate(first, scanner, out var firstTemplate, out var firstFailure))
-            {
-                Fail(firstFailure!);
-                return;
-            }
-
-            StatusText = "Lift your finger, then place the SAME finger again (2 of 2)...";
-            var (second, secondScanner) = await CaptureWithRecoveryAsync(scanner, token);
-            scanner = secondScanner;
-            if (!TryGetTemplate(second, scanner, out var secondTemplate, out var secondFailure))
-            {
-                Fail(secondFailure!);
-                return;
-            }
-
-            if (!scanner.Match(firstTemplate!, secondTemplate!))
-            {
-                Fail("The two scans didn't match. Please try again with the same finger, placed the same way both times.");
-                return;
-            }
-
-            // Cross-member duplicate detection — this fingerprint must not already belong
-            // to a different member.
-            foreach (var other in _repository.GetAll())
-            {
+                var released = await App.ScannerOwnership.AwaitReleasedAsync(AwaitKioskReleaseTimeoutMs);
+                if (!released)
+                    Trace.TraceWarning($"[EnrollFingerprintViewModel] SCANNER_OPEN_FAILED kiosk did not release in time (owner={App.ScannerOwnership.Current}), trying anyway");
                 token.ThrowIfCancellationRequested();
-                if (other.Id == Member.Id || other.FingerprintTemplate is null) continue;
-                if (scanner.Match(other.FingerprintTemplate, firstTemplate!))
+
+                App.ScannerOwnership.Acquire(ScannerOwnership.Owner.ENROLLMENT);
+                _sessionAcquired = true;
+
+                StatusText = "Connecting to scanner...";
+                var openResult = await OpenWithRetriesAsync();
+                token.ThrowIfCancellationRequested();
+                if (openResult is not FingerprintScanner.OpenResult.Success || App.ScannerHub.Current is null)
                 {
-                    Fail($"This fingerprint is already enrolled for {other.Name}. Each fingerprint can only belong to one member.");
+                    Trace.TraceWarning($"[EnrollFingerprintViewModel] scanner open failed result={openResult.GetType().Name} detail={ScannerDiagnostics.LastFailure ?? "(none)"}");
+                    NeedsDriver = openResult is FingerprintScanner.OpenResult.SdkUnavailable;
+                    ReleaseSession(); // nothing to hold on to: give the scanner back to the kiosk loop
+                    Fail(DescribeOpenFailure(openResult));
                     return;
                 }
             }
 
-            Member.FingerprintTemplate = firstTemplate;
+            var scanner = App.ScannerHub.Current;
+            if (scanner is null)
+            {
+                ReleaseSession();
+                Fail("Fingerprint scanner unavailable. Please reconnect the scanner.");
+                return;
+            }
+
+            var isConfirmScan = _firstScan is not null;
+            StatusText = isConfirmScan
+                ? "Place the SAME finger on the scanner again (scan 2 of 2)..."
+                : "Place your finger on the scanner (scan 1 of 2)...";
+
+            var (capture, usedScanner) = await CaptureWithRecoveryAsync(scanner, token);
+            scanner = usedScanner;
+
+            // Timeout / capture error: the first scan (if any) is kept, so the user just taps again (Android).
+            if (!TryGetTemplate(capture, scanner, out var template, out var failure))
+            {
+                Fail(failure!);
+                return;
+            }
+
+            if (_firstScan is null)
+            {
+                _firstScan = template;
+                IsError = false;
+                StatusText = "First scan captured. Scan the same finger again to confirm.";
+                RaiseStepChanged();
+                return;
+            }
+
+            if (!scanner.Match(_firstScan, template!))
+            {
+                _firstScan = null;
+                RaiseStepChanged();
+                Fail("The two scans didn't match. Starting over - scan the same finger twice.");
+                return;
+            }
+
+            // Reject a fingerprint already assigned to a DIFFERENT member (this member's own old template is
+            // excluded so re-enrolling a worn print keeps working). Members are read on this (UI) thread, which
+            // owns the database connection; the CPU-heavy matching runs off-thread.
+            StatusText = "Checking for duplicates...";
+            var others = _repository.GetAll().Where(o => o.Id != Member.Id && o.FingerprintTemplate is not null).ToList();
+            var captured = template!;
+            var matcher = scanner;
+            var duplicateOwner = await Task.Run(() =>
+            {
+                foreach (var other in others)
+                {
+                    token.ThrowIfCancellationRequested();
+                    if (matcher.Match(other.FingerprintTemplate!, captured)) return other;
+                }
+                return null;
+            });
+
+            if (duplicateOwner is not null)
+            {
+                _firstScan = null;
+                RaiseStepChanged();
+                Fail($"This fingerprint is already enrolled for {duplicateOwner.Name}.");
+                return;
+            }
+
+            // Android stores the confirm (second) capture.
+            Member.FingerprintTemplate = captured;
             Member.UpdatedAtMillis = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
             _repository.Save(Member);
 
-            IsSuccess = true;
             StatusText = "Fingerprint enrolled successfully.";
+            IsSuccess = true;
+            ReleaseSession(); // finished: scanner goes back to the kiosk loop right away
         }
         catch (OperationCanceledException)
         {
-            StatusText = "Enrollment cancelled.";
+            StatusText = _firstScan is null ? "Scan cancelled." : "Scan cancelled. Scan the same finger again to confirm.";
+            RaiseStepChanged();
         }
         catch (Exception e)
         {
-            Trace.TraceError($"[EnrollFingerprintViewModel] Unexpected error: {e.Message}");
-            Fail("Something went wrong during enrollment. Please try again.");
+            Trace.TraceError($"[EnrollFingerprintViewModel] SCANNER_EXCEPTION in enrollment flow: {e.Message}");
+            Fail("Scanner error. Please try again.");
         }
         finally
         {
-            if (ownershipAcquired) App.ScannerOwnership.Release(ScannerOwnership.Owner.ENROLLMENT);
-            App.KioskLoop.RequestStart(); // hand the scanner back to the kiosk loop, whatever happened here
             IsBusy = false;
             _cts?.Dispose();
             _cts = null;
+            RaiseStepChanged();
         }
     }
 
@@ -268,7 +356,7 @@ public sealed class EnrollFingerprintViewModel : INotifyPropertyChanged
                 return true;
             case FingerprintScanner.CaptureResult.Timeout:
                 template = null;
-                failureMessage = "No finger was detected in time. Please try again.";
+                failureMessage = "No finger detected - try again.";
                 return false;
             case FingerprintScanner.CaptureResult.Error error:
                 App.ScannerHub.ReportOperationError(error.Code);

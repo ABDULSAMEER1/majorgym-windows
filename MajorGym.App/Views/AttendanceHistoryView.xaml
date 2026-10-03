@@ -57,10 +57,8 @@
 
                 <!-- Header: back + "MEMBER PROFILE" + tagline -->
                 <StackPanel Orientation="Horizontal" Margin="0,0,0,14">
-                    <Button Command="{Binding BackCommand}" Style="{StaticResource GymTextButton}" Padding="6,4" VerticalAlignment="Center">
-                        <TextBlock Text="&#xE72B;" FontFamily="{StaticResource GymIconFont}" FontSize="18" Foreground="{StaticResource GymText}"/>
-                    </Button>
-                    <StackPanel Margin="12,0,0,0" VerticalAlignment="Center">
+                    <Button Style="{StaticResource GymBackButton}" Command="{Binding BackCommand}"/>
+                    <StackPanel VerticalAlignment="Center">
                         <TextBlock Text="MEMBER PROFILE" Style="{StaticResource GymHeaderText}" FontSize="22" HorizontalAlignment="Left"/>
                         <TextBlock Text="Stronger Members  &#8226;  Healthier Tomorrow" Foreground="{StaticResource AdNeonCyan}" FontSize="12" FontWeight="Medium" Margin="0,2,0,0"/>
                     </StackPanel>

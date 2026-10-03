@@ -18,6 +18,14 @@
     <Resource Include="Assets\Fonts\*.ttf" />
   </ItemGroup>
 
+  <!-- Check-in sounds (same five clips as Android res/raw). Copied beside MajorGym.exe as Assets\Audio\*.mp3. -->
+  <ItemGroup>
+    <None Include="Assets\Audio\*.mp3">
+      <Link>Assets\Audio\%(Filename)%(Extension)</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
   <!-- SecuGen Universal Driver Installer (v3.0.0.3). Shipped beside MajorGym.exe so a PC without the SecuGen USB
        driver can install it from the Enroll Fingerprint screen ("Install Scanner Driver" button). The driver
        needs administrator rights, so it is launched (UAC prompt) rather than silently installed. -->

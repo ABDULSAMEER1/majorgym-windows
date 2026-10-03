@@ -13,6 +13,7 @@ name: Windows Build (MajorGym.exe)
 on:
   push:
     branches: [ "main" ]
+    tags: [ "v*" ]
   pull_request:
     branches: [ "main" ]
   workflow_dispatch: {}
@@ -23,6 +24,9 @@ env:
   BUILD_PLATFORM: x64
   # AssemblyName of MajorGym.App/MajorGym.App.csproj — the expected final executable name.
   EXPECTED_EXE: MajorGym.exe
+
+permissions:
+  contents: write   # lets a pushed version tag (v1.0.0) attach MajorGym-Setup.exe to a GitHub Release
 
 jobs:
   build-windows-x64:
@@ -124,3 +128,58 @@ jobs:
           path: MajorGym-Windows-x64.zip
           if-no-files-found: error
           retention-days: 14
+
+      # ------------------------------------------------------------------------------------------
+      # Installer (the Windows equivalent of the Android APK): a self-contained build (no .NET needed on
+      # the target PC) wrapped in MajorGym-Setup.exe. These steps are separate and non-fatal, so the
+      # artifact above is still produced even if packaging hits a problem.
+      # ------------------------------------------------------------------------------------------
+      - name: Publish self-contained (win-x64)
+        id: publish
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          dotnet publish MajorGym.App/MajorGym.App.csproj -c Release -r win-x64 --self-contained true -p:Platform=x64 -o publish
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          # Overlay anything the verified build output has that publish left out (SecuGen sg*.dll modules, Assets\Audio,
+          # Drivers\...), so the installer contains exactly what the working build does.
+          $out = "${{ steps.locate.outputs.outdir }}"
+          Get-ChildItem -Path $out -Recurse -File | ForEach-Object {
+            $rel = $_.FullName.Substring($out.Length).TrimStart('\')
+            $dest = Join-Path "publish" $rel
+            if (-not (Test-Path $dest)) {
+              New-Item -ItemType Directory -Path (Split-Path $dest) -Force | Out-Null
+              Copy-Item $_.FullName $dest
+            }
+          }
+          foreach ($need in @("MajorGym.exe", "Drivers\SgDrvSetupUniversal.exe", "Drivers\vc_redist.x64.exe", "Assets\Audio\active.mp3")) {
+            if (-not (Test-Path (Join-Path "publish" $need))) { Write-Error "publish folder is missing $need"; exit 1 }
+          }
+          Write-Host "Publish folder ready:"; Get-ChildItem publish | Select-Object Name, Length | Format-Table -AutoSize
+
+      - name: Build installer (Inno Setup)
+        id: installer
+        if: steps.publish.outcome == 'success'
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          choco install innosetup -y --no-progress
+          $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+          & $iscc "/DMyAppVersion=1.0.${{ github.run_number }}" "installer\MajorGym.iss"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Get-Item "installer-output\MajorGym-Setup.exe" | Select-Object FullName, Length
+
+      - name: Upload installer artifact
+        if: steps.installer.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: MajorGym-Setup
+          path: installer-output/MajorGym-Setup.exe
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Attach installer to GitHub Release (version tags only)
+        if: steps.installer.outcome == 'success' && startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: installer-output/MajorGym-Setup.exe

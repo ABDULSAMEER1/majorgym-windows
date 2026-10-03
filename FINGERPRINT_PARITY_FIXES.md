@@ -49,3 +49,23 @@ The Windows scanner layer was already a close port; these changes fix the places
 * **Check Scanner** (Enroll Fingerprint screen) reports: Visual C++ runtime, sgfplib.dll, sgfdu*.dll driver modules,
   scanner present on USB — plus the next step to take.
 * Cannot be automated: running a real capture test in GitHub (no scanner on the runner) or approving the admin prompt.
+
+## Check-in sounds (Android parity)
+Root cause of "no sound on Windows": the kiosk loop already called the audio player for ACTIVE / EXPIRED /
+EXPIRING_TODAY / EXPIRING_IN_1_DAY / UNIDENTIFIED, but the five clips were never in the Windows project (the
+Assets\Audio folder it looked in was empty, so every call was silently skipped). The five Android clips are now
+in MajorGym.App\Assets\Audio, copied beside MajorGym.exe, and the app plays them from there. Status rules are the same
+as Android (expired < today < tomorrow < active, by local calendar date).
+
+## Enrollment: two scans (Android parity)
+Same flow as Android's EnrollFingerprintScreen: "Start Scan" -> "First scan captured. Scan the same finger again to
+confirm." -> "Scan Again to Confirm". The scanner stays held between the two scans, the first scan survives a
+timeout/read error on the second, a mismatch restarts both scans, a fingerprint already enrolled for another member is
+rejected, the confirm scan is the one saved, and leaving the screen hands the scanner back to the kiosk. Works the same
+for new enrollment and re-enroll (re-enroll replaces the old template).
+
+## Windows installer
+CI now also publishes a self-contained build (no .NET install needed) and wraps it in `MajorGym-Setup.exe` with Inno
+Setup (`installer\MajorGym.iss`): Start-menu/desktop shortcuts, uninstaller, and an optional step that installs the
+Visual C++ runtime + SecuGen driver. Download it from Actions > the run > Artifacts > MajorGym-Setup, or push a tag
+(`git tag v1.0.0 && git push origin v1.0.0`) to get it on the repo's Releases page.

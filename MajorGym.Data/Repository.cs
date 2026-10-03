@@ -713,6 +713,27 @@ public sealed class Repository
         return cmd.ExecuteNonQuery() > 0;
     }
 
+    /// <summary>Permanently erases several archived records in ONE transaction (all or none) — the bulk form of
+    /// <see cref="DeleteArchivedMemberPermanently"/> used by the Expired Archive multi-select delete. Same local-only
+    /// semantics (no sync change-log entry). Returns how many rows were actually removed.</summary>
+    public int DeleteArchivedMembersPermanently(IEnumerable<string> originalMemberIds)
+    {
+        var ids = originalMemberIds.Distinct().ToList();
+        if (ids.Count == 0) return 0;
+        using var tx = _db.Connection.BeginTransaction();
+        var removed = 0;
+        foreach (var id in ids)
+        {
+            using var cmd = _db.Connection.CreateCommand();
+            cmd.Transaction = tx;
+            cmd.CommandText = "DELETE FROM archived_members WHERE originalMemberId = $id";
+            cmd.Parameters.AddWithValue("$id", id);
+            removed += cmd.ExecuteNonQuery();
+        }
+        tx.Commit();
+        return removed;
+    }
+
     // ---------------- Backup import (Stage 4b) ----------------
 
     /// <summary>

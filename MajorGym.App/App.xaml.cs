@@ -64,8 +64,14 @@ public partial class App : System.Windows.Application
 
         ScannerHub = new ScannerHub();
         ScannerOwnership = new ScannerOwnership();
-        var audioDir = Path.Combine(AppDataDirectory, "Assets", "Audio");
-        Directory.CreateDirectory(audioDir);
+        // The check-in clips ship beside MajorGym.exe (Assets\Audio\*.mp3). Fall back to the per-user data folder
+        // only if a custom build removed them.
+        var audioDir = Path.Combine(AppContext.BaseDirectory, "Assets", "Audio");
+        if (!Directory.Exists(audioDir))
+        {
+            audioDir = Path.Combine(AppDataDirectory, "Assets", "Audio");
+            Directory.CreateDirectory(audioDir);
+        }
         Directory.CreateDirectory(Path.GetDirectoryName(StartupVideoPath)!);
         KioskLoop = new FingerprintKioskLoop(Repository, new WpfDbThread(), ScannerHub, ScannerOwnership, new MembershipAudioPlayer(), audioDir);
 

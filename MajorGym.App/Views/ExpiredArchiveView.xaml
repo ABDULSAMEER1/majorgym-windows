@@ -1,39 +1,158 @@
 <UserControl x:Class="MajorGym.App.Views.ExpiredArchiveView"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:ctl="clr-namespace:MajorGym.App.Controls"
+             Focusable="True">
+    <UserControl.InputBindings>
+        <KeyBinding Key="A" Modifiers="Ctrl" Command="{Binding SelectAllCommand}"/>
+        <KeyBinding Key="Escape" Command="{Binding ClearSelectionCommand}"/>
+        <KeyBinding Key="Delete" Command="{Binding RequestDeleteCommand}"/>
+    </UserControl.InputBindings>
+    <UserControl.Resources>
+        <!-- Tick box: a rounded square that fills with the accent colour and shows a check when the row is selected. -->
+        <Style x:Key="ArchiveTick" TargetType="Border">
+            <Setter Property="Width" Value="24"/>
+            <Setter Property="Height" Value="24"/>
+            <Setter Property="CornerRadius" Value="7"/>
+            <Setter Property="BorderThickness" Value="1.5"/>
+            <Setter Property="BorderBrush" Value="{StaticResource GymBorder}"/>
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="Margin" Value="0,0,12,0"/>
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding IsSelected}" Value="True">
+                    <Setter Property="Background" Value="{StaticResource GymAccent}"/>
+                    <Setter Property="BorderBrush" Value="{StaticResource GymAccent}"/>
+                </DataTrigger>
+            </Style.Triggers>
+        </Style>
+        <Style x:Key="ArchiveChip" TargetType="Button">
+            <Setter Property="Foreground" Value="{StaticResource GymText}"/>
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="Padding" Value="12,7"/>
+            <Setter Property="Margin" Value="0,0,8,0"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Bd" Background="{StaticResource GymSurfaceCard}" BorderBrush="{StaticResource GymBorder}" BorderThickness="1"
+                                CornerRadius="16" Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" TextElement.Foreground="{TemplateBinding Foreground}"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Bd" Property="BorderBrush" Value="{StaticResource GymAccent}"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </UserControl.Resources>
+
     <Grid Background="{StaticResource GymBg}">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
             <RowDefinition Height="*"/>
         </Grid.RowDefinitions>
-        <StackPanel Grid.Row="0" Margin="20,20,20,12" Orientation="Horizontal">
-            <Button Content="&#8592;" Command="{Binding BackCommand}" Background="Transparent" BorderThickness="0" Foreground="{StaticResource GymTextMuted}" Margin="0,0,12,0"/>
-            <TextBlock Text="Expired Archive" Style="{StaticResource GymHeading}"/>
+
+        <!-- Header: dedicated back button + heading -->
+        <DockPanel Grid.Row="0" Margin="20,20,20,12">
+            <Button DockPanel.Dock="Left" Style="{StaticResource GymBackButton}" Command="{Binding BackCommand}"/>
+            <TextBlock DockPanel.Dock="Right" Text="{Binding ShowingText}" Style="{StaticResource GymBody}" VerticalAlignment="Center"/>
+            <TextBlock Text="EXPIRED ARCHIVE" Style="{StaticResource GymHeaderText}"/>
+        </DockPanel>
+
+        <!-- Search -->
+        <TextBox Grid.Row="1" Style="{StaticResource GymTextBox}" Margin="20,0,20,10"
+                 Text="{Binding SearchText, UpdateSourceTrigger=PropertyChanged}" Tag="Search by name, phone or plan"/>
+
+        <!-- Selection tools: select first N, all, clear -->
+        <WrapPanel Grid.Row="2" Margin="20,0,20,10" VerticalAlignment="Center">
+            <TextBlock Text="Select first" Style="{StaticResource GymBody}" VerticalAlignment="Center" Margin="0,0,8,0"/>
+            <TextBox Width="70" Style="{StaticResource GymTextBox}" Padding="10,7" FontSize="13" Margin="0,0,8,0"
+                     Text="{Binding SelectCountText, UpdateSourceTrigger=PropertyChanged}" Tag="No."
+                     ctl:InputGuard.Mode="Digits">
+                <TextBox.InputBindings>
+                    <KeyBinding Key="Return" Command="{Binding SelectFirstNCommand}"/>
+                </TextBox.InputBindings>
+            </TextBox>
+            <Button Content="Select" Command="{Binding SelectFirstNCommand}" Style="{StaticResource ArchiveChip}"/>
+            <Button Content="Select all" Command="{Binding SelectAllCommand}" Style="{StaticResource ArchiveChip}"/>
+            <Button Content="Clear" Command="{Binding ClearSelectionCommand}" Style="{StaticResource ArchiveChip}"/>
+            <TextBlock Text="Tip: Shift+click selects a range, Ctrl+click adds one." Foreground="{StaticResource GymTextFaint}" FontSize="11"
+                       VerticalAlignment="Center" Margin="4,0,0,0"/>
+        </WrapPanel>
+
+        <!-- Selection bar: count + delete (+ inline confirmation) + notices -->
+        <StackPanel Grid.Row="3" Margin="20,0,20,10">
+            <TextBlock Text="{Binding Notice}" Foreground="{StaticResource GymWarning}" FontSize="12" Margin="0,0,0,6"
+                       Visibility="{Binding Notice, Converter={StaticResource NullToVis}}"/>
+            <Border Background="{StaticResource GymSurface2}" BorderBrush="{StaticResource GymBorder}" BorderThickness="1" CornerRadius="12" Padding="14,10"
+                    Visibility="{Binding HasSelection, Converter={StaticResource BoolToVis}}">
+                <StackPanel>
+                    <DockPanel>
+                        <Button DockPanel.Dock="Right" Content="{Binding DeleteButtonText}" Command="{Binding RequestDeleteCommand}"
+                                Background="{StaticResource GymDanger}" Foreground="White" BorderThickness="0" Padding="16,8" Cursor="Hand"
+                                Visibility="{Binding IsConfirmingDelete, Converter={StaticResource InverseBoolToVis}}"/>
+                        <TextBlock Text="{Binding SelectionText}" Foreground="{StaticResource GymText}" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                    </DockPanel>
+                    <StackPanel Visibility="{Binding IsConfirmingDelete, Converter={StaticResource BoolToVis}}" Margin="0,10,0,0">
+                        <TextBlock Text="{Binding ConfirmText}" Style="{StaticResource GymBody}" TextWrapping="Wrap" Margin="0,0,0,10"/>
+                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                            <Button Content="Cancel" Command="{Binding CancelDeleteCommand}" Background="Transparent" BorderThickness="0"
+                                    Foreground="{StaticResource GymTextMuted}" Margin="0,0,16,0" Cursor="Hand"/>
+                            <Button Content="Yes, delete" Command="{Binding ConfirmDeleteCommand}" Background="{StaticResource GymDanger}" Foreground="White"
+                                    BorderThickness="0" Padding="16,8" Cursor="Hand"/>
+                        </StackPanel>
+                    </StackPanel>
+                </StackPanel>
+            </Border>
         </StackPanel>
-        <TextBlock Grid.Row="1" Text="No archived members." Style="{StaticResource GymBody}"
-                   HorizontalAlignment="Center" VerticalAlignment="Center"
+
+        <!-- List -->
+        <TextBlock Grid.Row="4" Text="{Binding EmptyText}" Style="{StaticResource GymBody}" HorizontalAlignment="Center" VerticalAlignment="Center"
                    Visibility="{Binding IsEmpty, Converter={StaticResource BoolToVis}}"/>
-        <ScrollViewer Grid.Row="1">
-            <ItemsControl ItemsSource="{Binding Rows}" Margin="20,0,20,20">
+        <ScrollViewer Grid.Row="4" VerticalScrollBarVisibility="Auto">
+            <ItemsControl ItemsSource="{Binding Rows}" Margin="20,0,20,90">
                 <ItemsControl.ItemTemplate>
                     <DataTemplate>
-                        <Border Style="{StaticResource GymCard}" Margin="0,0,0,8" Cursor="Hand">
-                            <Border.InputBindings>
-                                <MouseBinding MouseAction="LeftClick" Command="{Binding Open}"/>
-                            </Border.InputBindings>
+                        <Border x:Name="Card" Style="{StaticResource GymCard}" Margin="0,0,0,8" Cursor="Hand"
+                                MouseLeftButtonUp="OnCardClick">
                             <Grid>
                                 <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/>
                                     <ColumnDefinition Width="*"/>
                                     <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="Auto"/>
                                 </Grid.ColumnDefinitions>
-                                <StackPanel>
+                                <Border Grid.Column="0" Style="{StaticResource ArchiveTick}" MouseLeftButtonUp="OnTickClick" ToolTip="Select (Shift+click for a range)">
+                                    <TextBlock Text="&#xE73E;" FontFamily="Segoe MDL2 Assets" FontSize="13" Foreground="#FF06121A"
+                                               HorizontalAlignment="Center" VerticalAlignment="Center"
+                                               Visibility="{Binding IsSelected, Converter={StaticResource BoolToVis}}"/>
+                                </Border>
+                                <StackPanel Grid.Column="1" VerticalAlignment="Center">
                                     <TextBlock Text="{Binding Name}" Foreground="{StaticResource GymText}" FontWeight="SemiBold"/>
                                     <TextBlock Text="{Binding Phone}" Style="{StaticResource GymBody}"/>
                                     <TextBlock Text="{Binding LastPlan}" Style="{StaticResource GymBody}"/>
                                 </StackPanel>
-                                <TextBlock Grid.Column="1" Text="{Binding ArchivedOn}" Style="{StaticResource GymBody}" VerticalAlignment="Center"/>
+                                <TextBlock Grid.Column="2" Text="{Binding ArchivedOn}" Style="{StaticResource GymBody}" VerticalAlignment="Center" Margin="12,0,8,0"/>
+                                <Button Grid.Column="3" Command="{Binding Open}" Style="{StaticResource GymTextButton}" Padding="8,6" ToolTip="Open details"
+                                        VerticalAlignment="Center">
+                                    <TextBlock Text="&#xE76C;" FontFamily="Segoe MDL2 Assets" FontSize="14" Foreground="{StaticResource GymTextMuted}"/>
+                                </Button>
                             </Grid>
                         </Border>
+                        <DataTemplate.Triggers>
+                            <DataTrigger Binding="{Binding IsSelected}" Value="True">
+                                <Setter TargetName="Card" Property="BorderBrush" Value="{StaticResource GymAccent}"/>
+                                <Setter TargetName="Card" Property="Background" Value="{StaticResource GymSurface2}"/>
+                            </DataTrigger>
+                        </DataTemplate.Triggers>
                     </DataTemplate>
                 </ItemsControl.ItemTemplate>
             </ItemsControl>

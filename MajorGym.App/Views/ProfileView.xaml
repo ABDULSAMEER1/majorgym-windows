@@ -12,8 +12,7 @@
             <StackPanel MaxWidth="560" HorizontalAlignment="Stretch" Margin="16,20,16,24">
 
                 <DockPanel Margin="0,0,0,16">
-                    <Button DockPanel.Dock="Left" Command="{Binding BackCommand}" Background="Transparent" BorderThickness="0" Cursor="Hand"
-                            Foreground="{StaticResource GymText}" FontFamily="Segoe MDL2 Assets" FontSize="18" Content="&#xE72B;" Padding="0,0,10,0"/>
+                    <Button DockPanel.Dock="Left" Style="{StaticResource GymBackButton}" Command="{Binding BackCommand}"/>
                     <TextBlock Text="MEMBER PROFILE" Style="{StaticResource GymHeaderText}"/>
                 </DockPanel>
 
